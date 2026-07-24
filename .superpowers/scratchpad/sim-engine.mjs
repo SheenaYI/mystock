@@ -191,3 +191,78 @@ export function resolveSellOutcome(position, nextDayChangePct, params) {
   const pnlPct = Number((((sellPrice - position.buyPrice) / position.buyPrice) * 100).toFixed(2));
   return { stockId: position.stockId, name: position.name, buyPrice: position.buyPrice, sellPrice, pnlAmount, pnlPct, ruleTriggered };
 }
+
+export function createInitialState(initialCapital, strategyParams = DEFAULT_STRATEGY_PARAMS) {
+  return {
+    day: 1,
+    phase: 'selection',
+    initialCapital,
+    capital: initialCapital,
+    positions: [],
+    lastPicks: [],
+    lastSettlement: null,
+    history: [],
+    strategyParams: { ...strategyParams },
+    stockPool: null,
+  };
+}
+
+export function resetSimulation(initialCapital, strategyParams, rng) {
+  const state = createInitialState(initialCapital, strategyParams);
+  return { ...state, stockPool: createStockPool(rng) };
+}
+
+export function runSelectionPhase(state, rng) {
+  if (state.phase !== 'selection') {
+    throw new Error(`runSelectionPhase called in phase "${state.phase}", expected "selection"`);
+  }
+  const picks = selectDailyPicks(state.stockPool, state.strategyParams, rng, 3);
+  const positions = computePositions(picks, state.capital, state.strategyParams);
+  const investedTotal = positions.reduce((sum, p) => sum + p.investedAmount, 0);
+  return {
+    ...state,
+    phase: 'holding',
+    lastPicks: picks,
+    positions,
+    capital: Number((state.capital - investedTotal).toFixed(2)),
+  };
+}
+
+export function runSettlementPhase(state, rng) {
+  if (state.phase !== 'holding') {
+    throw new Error(`runSettlementPhase called in phase "${state.phase}", expected "holding"`);
+  }
+  const settlement = state.positions.map(position => {
+    const changePct = simulateNextDayChangePct(position.score, rng);
+    return resolveSellOutcome(position, changePct, state.strategyParams);
+  });
+  const proceedsTotal = settlement.reduce((sum, s) => {
+    const position = state.positions.find(p => p.stockId === s.stockId);
+    return sum + s.sellPrice * position.shares;
+  }, 0);
+  const totalPnlAmount = Number(settlement.reduce((sum, s) => sum + s.pnlAmount, 0).toFixed(2));
+  const winCount = settlement.filter(s => s.pnlAmount > 0).length;
+  const newCapital = Number((state.capital + proceedsTotal).toFixed(2));
+  const historyEntry = {
+    day: state.day,
+    picks: state.lastPicks,
+    results: settlement,
+    totalPnlAmount,
+    totalPnlPct: Number(((totalPnlAmount / state.initialCapital) * 100).toFixed(2)),
+    winCount,
+    capitalAfter: newCapital,
+  };
+  return {
+    ...state,
+    phase: 'selection',
+    day: state.day + 1,
+    capital: newCapital,
+    positions: [],
+    lastSettlement: settlement,
+    history: [...state.history, historyEntry],
+  };
+}
+
+export function updateStrategyParams(state, newParams) {
+  return { ...state, strategyParams: { ...state.strategyParams, ...newParams } };
+}

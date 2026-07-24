@@ -219,3 +219,79 @@ test('resolveSellOutcome computes pnlPct relative to buyPrice', () => {
   const r = resolveSellOutcome(position, 3, params);
   assert.equal(r.pnlPct, 3);
 });
+
+import { createInitialState, resetSimulation, runSelectionPhase, runSettlementPhase, updateStrategyParams } from './sim-engine.mjs';
+
+test('createInitialState starts at day 1 in the selection phase with the given capital', () => {
+  const s = createInitialState(100000);
+  assert.equal(s.day, 1);
+  assert.equal(s.phase, 'selection');
+  assert.equal(s.capital, 100000);
+  assert.equal(s.initialCapital, 100000);
+  assert.deepEqual(s.positions, []);
+  assert.deepEqual(s.history, []);
+  assert.equal(s.strategyParams.maxHoldings, 3); // DEFAULT_STRATEGY_PARAMS default
+});
+
+test('resetSimulation attaches a freshly generated stock pool', () => {
+  const s = resetSimulation(50000, undefined, createRng(1));
+  assert.ok(Array.isArray(s.stockPool));
+  assert.ok(s.stockPool.length > 0);
+});
+
+test('runSelectionPhase moves to holding, sets positions, and debits capital by the invested amount', () => {
+  let s = resetSimulation(100000, undefined, createRng(1));
+  // Note: seed pair (pool=1, selection=1) is chosen deliberately — the strategy's
+  // hard filters are a narrow band (e.g. changePct must land in a 2pp window out
+  // of an 11pp range), so many small rng seeds legitimately yield zero picks for
+  // a given day (verified: pool=1/selection=2 yields 0 picks). Seed 1 reliably
+  // yields >0 picks, which is what this assertion needs to be meaningful.
+  s = runSelectionPhase(s, createRng(1));
+  assert.equal(s.phase, 'holding');
+  assert.ok(s.positions.length > 0);
+  assert.ok(s.lastPicks.length > 0);
+  const investedTotal = s.positions.reduce((sum, p) => sum + p.investedAmount, 0);
+  assert.equal(s.capital, Number((100000 - investedTotal).toFixed(2)));
+});
+
+test('runSelectionPhase throws if called outside the selection phase', () => {
+  let s = resetSimulation(100000, undefined, createRng(1));
+  s = runSelectionPhase(s, createRng(1));
+  assert.throws(() => runSelectionPhase(s, createRng(3)));
+});
+
+test('runSettlementPhase moves back to selection, advances the day, clears positions, and appends history', () => {
+  let s = resetSimulation(100000, undefined, createRng(1));
+  s = runSelectionPhase(s, createRng(1));
+  const positionsBefore = s.positions;
+  s = runSettlementPhase(s, createRng(4));
+  assert.equal(s.phase, 'selection');
+  assert.equal(s.day, 2);
+  assert.deepEqual(s.positions, []);
+  assert.equal(s.history.length, 1);
+  assert.equal(s.history[0].day, 1);
+  assert.equal(s.history[0].results.length, positionsBefore.length);
+  assert.ok('winCount' in s.history[0]);
+  assert.ok(typeof s.lastSettlement !== 'undefined');
+});
+
+test('runSettlementPhase throws if called outside the holding phase', () => {
+  const s = resetSimulation(100000, undefined, createRng(1));
+  assert.throws(() => runSettlementPhase(s, createRng(2)));
+});
+
+test('a full selection -> settlement cycle conserves capital plus/minus pnl (no money created or destroyed)', () => {
+  let s = resetSimulation(100000, undefined, createRng(1));
+  s = runSelectionPhase(s, createRng(1));
+  assert.ok(s.positions.length > 0, 'sanity check: this run must actually hold real positions');
+  s = runSettlementPhase(s, createRng(4));
+  const expectedCapital = Number((100000 + s.history[0].totalPnlAmount).toFixed(2));
+  assert.equal(s.capital, expectedCapital);
+});
+
+test('updateStrategyParams merges partial overrides into the existing params without dropping the rest', () => {
+  const s = createInitialState(100000);
+  const updated = updateStrategyParams(s, { maxHoldings: 1 });
+  assert.equal(updated.strategyParams.maxHoldings, 1);
+  assert.equal(updated.strategyParams.changePctMin, 3); // untouched default preserved
+});

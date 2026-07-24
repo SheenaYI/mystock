@@ -295,3 +295,17 @@ test('updateStrategyParams merges partial overrides into the existing params wit
   assert.equal(updated.strategyParams.maxHoldings, 1);
   assert.equal(updated.strategyParams.changePctMin, 3); // untouched default preserved
 });
+
+test('zero-picks path: selection phase with no qualifying picks followed by settlement conserves capital and records zero pnl', () => {
+  let s = resetSimulation(100000, undefined, createRng(1));
+  // selection seed 2 is confirmed to yield zero picks against pool seed 1 under DEFAULT_STRATEGY_PARAMS
+  s = runSelectionPhase(s, createRng(2));
+  assert.deepEqual(s.positions, []);
+  assert.equal(s.capital, 100000);
+  // settlement phase completes the cycle
+  s = runSettlementPhase(s, createRng(4));
+  assert.deepEqual(s.history[0].results, []);
+  assert.equal(s.history[0].totalPnlAmount, 0);
+  assert.equal(s.history[0].winCount, 0);
+  assert.equal(s.capital, 100000);
+});

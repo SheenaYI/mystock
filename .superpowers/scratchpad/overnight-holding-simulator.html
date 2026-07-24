@@ -310,8 +310,21 @@ function updateStrategyParams(state, newParams) {
 }
 // ---- END inlined sim-engine.mjs ----
 
+const STORAGE_KEY = 'overnight-holding-sim-state-v1';
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(AppState));
+}
+
+function loadState() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+const persisted = loadState();
 let liveRng = createRng(Date.now() % 2147483647);
-let AppState = resetSimulation(100000, DEFAULT_STRATEGY_PARAMS, liveRng);
+let AppState = persisted || resetSimulation(100000, DEFAULT_STRATEGY_PARAMS, liveRng);
 
 function fmtMoney(n) { return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtPct(n) { return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`; }
@@ -337,6 +350,7 @@ function renderSelectionPhase(container) {
   `;
   document.getElementById('btn-select').onclick = () => {
     AppState = runSelectionPhase(AppState, liveRng);
+    saveState();
     render();
   };
 }
@@ -368,6 +382,7 @@ function renderHoldingPhase(container) {
   `;
   document.getElementById('btn-settle').onclick = () => {
     AppState = runSettlementPhase(AppState, liveRng);
+    saveState();
     render();
   };
 }
@@ -389,6 +404,59 @@ function renderSettlementSummary(container) {
   `;
   document.getElementById('btn-continue').onclick = () => {
     AppState = { ...AppState, lastSettlement: null };
+    saveState();
+    render();
+  };
+}
+
+const PARAM_FIELDS = [
+  { key: 'changePctMin', label: '涨幅下限 %', step: 0.1 },
+  { key: 'changePctMax', label: '涨幅上限 %', step: 0.1 },
+  { key: 'volumeRatioMin', label: '量比下限', step: 0.1 },
+  { key: 'marketCapMinYi', label: '市值下限（亿）', step: 1 },
+  { key: 'marketCapMaxYi', label: '市值上限（亿）', step: 1 },
+  { key: 'turnoverMinPct', label: '换手率下限 %', step: 0.1 },
+  { key: 'turnoverMaxPct', label: '换手率上限 %', step: 0.1 },
+  { key: 'maxSingleStockPct', label: '单票仓位上限 %', step: 1 },
+  { key: 'maxTotalPositionPct', label: '总仓位上限 %', step: 1 },
+  { key: 'maxHoldings', label: '最大持股数', step: 1 },
+  { key: 'takeProfitOpenPctMin', label: '止盈触发涨幅 %', step: 0.1 },
+  { key: 'stopLossOpenPct', label: '止损触发跌幅 %', step: 0.1 },
+];
+
+function renderSettingsPanel(container) {
+  const fields = PARAM_FIELDS.map(f => `
+    <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+      ${f.label}
+      <input type="number" step="${f.step}" data-key="${f.key}" value="${AppState.strategyParams[f.key]}" />
+    </label>
+  `).join('');
+  container.innerHTML = `
+    <h2>策略设置</h2>
+    <label style="display:flex; flex-direction:column; gap:4px; font-size:13px; max-width:200px;">
+      初始资金
+      <input type="number" id="initial-capital" step="1000" value="${AppState.initialCapital}" />
+    </label>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px,1fr)); gap:12px; margin:12px 0;">
+      ${fields}
+    </div>
+    <button id="btn-save-settings">保存设置</button>
+    <button id="btn-reset" class="secondary">重置模拟</button>
+  `;
+  document.getElementById('btn-save-settings').onclick = () => {
+    const updates = {};
+    container.querySelectorAll('input[data-key]').forEach(input => {
+      updates[input.dataset.key] = Number(input.value);
+    });
+    AppState = updateStrategyParams(AppState, updates);
+    saveState();
+    render();
+  };
+  document.getElementById('btn-reset').onclick = () => {
+    const capital = Number(document.getElementById('initial-capital').value) || 100000;
+    liveRng = createRng(Date.now() % 2147483647);
+    AppState = resetSimulation(capital, AppState.strategyParams, liveRng);
+    saveState();
     render();
   };
 }
@@ -403,6 +471,7 @@ function render() {
   } else {
     renderSelectionPhase(main);
   }
+  renderSettingsPanel(document.getElementById('settings-panel'));
 }
 
 render();

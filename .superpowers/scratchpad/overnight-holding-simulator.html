@@ -325,6 +325,11 @@ function loadState() {
 const persisted = loadState();
 let liveRng = createRng(Date.now() % 2147483647);
 let AppState = persisted || resetSimulation(100000, DEFAULT_STRATEGY_PARAMS, liveRng);
+// Tracks an in-progress (not-yet-applied) edit to the "初始资金" field so that
+// clicking "保存设置" (which only persists strategyParams and triggers a full
+// re-render) doesn't silently discard a capital value the user typed but
+// hasn't applied via "重置模拟" yet. Cleared once a reset actually applies it.
+let pendingInitialCapital = null;
 
 function fmtMoney(n) { return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtPct(n) { return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`; }
@@ -435,7 +440,7 @@ function renderSettingsPanel(container) {
     <h2>策略设置</h2>
     <label style="display:flex; flex-direction:column; gap:4px; font-size:13px; max-width:200px;">
       初始资金
-      <input type="number" id="initial-capital" step="1000" value="${AppState.initialCapital}" />
+      <input type="number" id="initial-capital" step="1000" value="${pendingInitialCapital !== null ? pendingInitialCapital : AppState.initialCapital}" />
     </label>
     <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px,1fr)); gap:12px; margin:12px 0;">
       ${fields}
@@ -443,11 +448,15 @@ function renderSettingsPanel(container) {
     <button id="btn-save-settings">保存设置</button>
     <button id="btn-reset" class="secondary">重置模拟</button>
   `;
+  document.getElementById('initial-capital').oninput = (e) => {
+    pendingInitialCapital = e.target.value;
+  };
   document.getElementById('btn-save-settings').onclick = () => {
     const updates = {};
     container.querySelectorAll('input[data-key]').forEach(input => {
       updates[input.dataset.key] = Number(input.value);
     });
+    pendingInitialCapital = document.getElementById('initial-capital').value;
     AppState = updateStrategyParams(AppState, updates);
     saveState();
     render();
@@ -456,6 +465,7 @@ function renderSettingsPanel(container) {
     const capital = Number(document.getElementById('initial-capital').value) || 100000;
     liveRng = createRng(Date.now() % 2147483647);
     AppState = resetSimulation(capital, AppState.strategyParams, liveRng);
+    pendingInitialCapital = null;
     saveState();
     render();
   };

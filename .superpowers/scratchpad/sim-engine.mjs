@@ -36,3 +36,22 @@ export function createStockPool(rng, count = 36) {
   }
   return pool;
 }
+
+export function generateDailyMetrics(stock, rng) {
+  const changePct = -3 + rng() * 11; // -3% ~ +8%; most rolls won't clear the 3-5% filter, mirrors real distribution
+  const volumeRatio = 0.5 + rng() * 2.5;
+  const turnoverPct = 1 + rng() * 14;
+  const marketCapYi = stock.baseMarketCapYi * (0.9 + rng() * 0.2);
+  const hadLimitUpIn20d = rng() < 0.35;
+  const aboveAvgLine = rng() < 0.55;
+  const above5And10Day = rng() < 0.5;
+  const volumeStepPattern = rng() < 0.4;
+  const inTopHotSector = rng() < 3 / INDUSTRIES.length; // roughly "top 3 sectors of the day" odds
+  const basePrice = 8 + rng() * 60; // 8~68元
+  const closePrice = Number((basePrice * (1 + changePct / 100)).toFixed(2));
+  return {
+    stockId: stock.id, changePct, volumeRatio, turnoverPct, marketCapYi,
+    hadLimitUpIn20d, aboveAvgLine, above5And10Day, volumeStepPattern, inTopHotSector,
+    closePrice,
+  };
+}

@@ -132,3 +132,44 @@ test('selectDailyPicks orchestrates metrics generation + scoring deterministical
   assert.deepEqual(picksA.map(p => p.id), picksB.map(p => p.id));
   assert.ok(picksA.length <= 3);
 });
+
+import { computeBuyPriceRange, computePositions } from './sim-engine.mjs';
+
+test('computeBuyPriceRange brackets the close price by +/-0.5%', () => {
+  const r = computeBuyPriceRange(20);
+  assert.equal(r.low, 19.9);
+  assert.equal(r.high, 20.1);
+  assert.equal(r.suggested, 20);
+});
+
+test('computePositions splits the position budget evenly across chosen picks, capped by maxSingleStockPct', () => {
+  const picks = [
+    { id: 'A', name: 'A', industry: '半导体', closePrice: 20, score: 1, reasons: [] },
+    { id: 'B', name: 'B', industry: '医药生物', closePrice: 50, score: 0.9, reasons: [] },
+    { id: 'C', name: 'C', industry: '军工', closePrice: 10, score: 0.8, reasons: [] },
+  ];
+  const params = { maxHoldings: 3, maxTotalPositionPct: 60, maxSingleStockPct: 25 };
+  const positions = computePositions(picks, 100000, params);
+  assert.equal(positions.length, 3);
+  // total budget = 60000, split 3 ways = 20000/stock, single cap = 25000/stock -> 20000 wins
+  assert.equal(positions[0].stockId, 'A');
+  assert.equal(positions[0].shares, 1000); // floor(20000/20/100)*100 = 1000
+  assert.equal(positions[0].investedAmount, 20000);
+  assert.equal(positions[1].shares, 400); // floor(20000/50/100)*100 = 400
+});
+
+test('computePositions respects maxHoldings by only buying the top-scored N picks', () => {
+  const picks = [
+    { id: 'A', name: 'A', industry: '半导体', closePrice: 20, score: 1, reasons: [] },
+    { id: 'B', name: 'B', industry: '医药生物', closePrice: 50, score: 0.9, reasons: [] },
+    { id: 'C', name: 'C', industry: '军工', closePrice: 10, score: 0.8, reasons: [] },
+  ];
+  const params = { maxHoldings: 2, maxTotalPositionPct: 50, maxSingleStockPct: 20 };
+  const positions = computePositions(picks, 100000, params);
+  assert.deepEqual(positions.map(p => p.stockId), ['A', 'B']);
+});
+
+test('computePositions returns an empty array when there are no picks', () => {
+  const params = { maxHoldings: 3, maxTotalPositionPct: 50, maxSingleStockPct: 20 };
+  assert.deepEqual(computePositions([], 100000, params), []);
+});

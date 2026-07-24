@@ -135,3 +135,31 @@ export function selectDailyPicks(pool, params, rng, count = 3) {
   }
   return pickTopDiverse(pool, metricsByStockId, params, count);
 }
+
+export function computeBuyPriceRange(closePrice) {
+  return {
+    low: Number((closePrice * 0.995).toFixed(2)),
+    high: Number((closePrice * 1.005).toFixed(2)),
+    suggested: closePrice,
+  };
+}
+
+export function computePositions(picks, capital, params) {
+  const n = Math.min(params.maxHoldings, picks.length);
+  const chosen = picks.slice(0, n);
+  if (chosen.length === 0) return [];
+
+  const totalBudget = capital * (params.maxTotalPositionPct / 100);
+  const perStockCap = capital * (params.maxSingleStockPct / 100);
+  const perStockBudget = Math.min(totalBudget / chosen.length, perStockCap);
+
+  return chosen.map(c => {
+    const buyPrice = c.closePrice;
+    const shares = Math.floor(perStockBudget / buyPrice / 100) * 100;
+    const investedAmount = Number((shares * buyPrice).toFixed(2));
+    return {
+      stockId: c.id, name: c.name, industry: c.industry,
+      buyPrice, shares, investedAmount, score: c.score, reasons: c.reasons,
+    };
+  });
+}

@@ -163,3 +163,31 @@ export function computePositions(picks, capital, params) {
     };
   });
 }
+
+export function simulateNextDayChangePct(score, rng) {
+  // Box-Muller transform for an approximately normal draw, mean shifted by
+  // matchScore so that better-matching picks (per the configured strategy
+  // params) are more likely to gap up the next morning. This is what makes
+  // tuning the strategy parameters visibly change the win rate/equity curve
+  // instead of producing pure noise.
+  const u1 = Math.min(Math.max(rng(), 1e-9), 1 - 1e-9);
+  const u2 = rng();
+  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  const baseStdPct = 2.2;
+  const meanBiasPct = (score - 0.5) * 4; // score 0..1 -> bias -2pp..+2pp
+  return z * baseStdPct + meanBiasPct;
+}
+
+function classifyOutcome(changePct, params) {
+  if (changePct <= params.stopLossOpenPct) return 'stop_loss';
+  if (changePct >= params.takeProfitOpenPctMin) return 'take_profit';
+  return 'flat_exit';
+}
+
+export function resolveSellOutcome(position, nextDayChangePct, params) {
+  const sellPrice = Number((position.buyPrice * (1 + nextDayChangePct / 100)).toFixed(2));
+  const ruleTriggered = classifyOutcome(nextDayChangePct, params);
+  const pnlAmount = Number(((sellPrice - position.buyPrice) * position.shares).toFixed(2));
+  const pnlPct = Number((((sellPrice - position.buyPrice) / position.buyPrice) * 100).toFixed(2));
+  return { stockId: position.stockId, name: position.name, buyPrice: position.buyPrice, sellPrice, pnlAmount, pnlPct, ruleTriggered };
+}

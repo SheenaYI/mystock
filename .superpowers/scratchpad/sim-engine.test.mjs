@@ -173,3 +173,49 @@ test('computePositions returns an empty array when there are no picks', () => {
   const params = { maxHoldings: 3, maxTotalPositionPct: 50, maxSingleStockPct: 20 };
   assert.deepEqual(computePositions([], 100000, params), []);
 });
+
+import { simulateNextDayChangePct, resolveSellOutcome } from './sim-engine.mjs';
+
+test('simulateNextDayChangePct biases its mean upward as score increases, holding rng fixed', () => {
+  // rng mocked to a fixed 2-value cycle so the random (Box-Muller) term is identical
+  // for both calls — only the score-driven mean bias should differ, by exactly 4pp
+  // (score 1 -> +2pp bias, score 0 -> -2pp bias).
+  const fixedRng = () => 0.5;
+  const highScore = simulateNextDayChangePct(1, fixedRng);
+  const lowScore = simulateNextDayChangePct(0, fixedRng);
+  assert.ok(Math.abs((highScore - lowScore) - 4) < 1e-9, `delta was ${highScore - lowScore}`);
+});
+
+test('simulateNextDayChangePct is deterministic for a fixed rng seed', () => {
+  const a = simulateNextDayChangePct(0.7, createRng(5));
+  const b = simulateNextDayChangePct(0.7, createRng(5));
+  assert.equal(a, b);
+});
+
+const params = { takeProfitOpenPctMin: 2, stopLossOpenPct: -1.5 };
+const position = { stockId: 'A', name: 'A股', buyPrice: 20, shares: 1000 };
+
+test('resolveSellOutcome classifies a low open as stop_loss', () => {
+  const r = resolveSellOutcome(position, -2, params);
+  assert.equal(r.ruleTriggered, 'stop_loss');
+  assert.equal(r.sellPrice, 19.6);
+  assert.equal(r.pnlAmount, -400);
+});
+
+test('resolveSellOutcome classifies a strong open as take_profit', () => {
+  const r = resolveSellOutcome(position, 3, params);
+  assert.equal(r.ruleTriggered, 'take_profit');
+  assert.equal(r.sellPrice, 20.6);
+  assert.equal(r.pnlAmount, 600);
+});
+
+test('resolveSellOutcome classifies a near-flat open as flat_exit', () => {
+  const r = resolveSellOutcome(position, 0.2, params);
+  assert.equal(r.ruleTriggered, 'flat_exit');
+  assert.ok(r.pnlAmount > 0);
+});
+
+test('resolveSellOutcome computes pnlPct relative to buyPrice', () => {
+  const r = resolveSellOutcome(position, 3, params);
+  assert.equal(r.pnlPct, 3);
+});

@@ -61,3 +61,74 @@ test('generateDailyMetrics is deterministic for a fixed rng seed', () => {
   const b = generateDailyMetrics(stock, createRng(9));
   assert.deepEqual(a, b);
 });
+
+import { scoreCandidate, pickTopDiverse, selectDailyPicks, DEFAULT_STRATEGY_PARAMS } from './sim-engine.mjs';
+
+const stock = { id: 'A', name: 'A股', industry: '半导体', baseMarketCapYi: 100, volatility: 1 };
+
+function metrics(overrides) {
+  return {
+    stockId: 'A', changePct: 4, volumeRatio: 2, turnoverPct: 7, marketCapYi: 100,
+    hadLimitUpIn20d: true, aboveAvgLine: true, above5And10Day: true,
+    volumeStepPattern: true, inTopHotSector: true, closePrice: 20,
+    ...overrides,
+  };
+}
+
+test('scoreCandidate scores 1.0 when all hard filters and all soft flags pass', () => {
+  const { passedHardFilters, score, reasons } = scoreCandidate(stock, metrics({}), DEFAULT_STRATEGY_PARAMS);
+  assert.equal(passedHardFilters, true);
+  assert.equal(score, 1);
+  assert.equal(reasons.length, 9); // 4 hard reasons + 5 soft reasons
+});
+
+test('scoreCandidate scores 0.5 when hard filters pass but no soft flags do', () => {
+  const m = metrics({ hadLimitUpIn20d: false, aboveAvgLine: false, above5And10Day: false, volumeStepPattern: false, inTopHotSector: false });
+  const { passedHardFilters, score } = scoreCandidate(stock, m, DEFAULT_STRATEGY_PARAMS);
+  assert.equal(passedHardFilters, true);
+  assert.equal(score, 0.5);
+});
+
+test('scoreCandidate fails hard filters when changePct is outside the configured range', () => {
+  const m = metrics({ changePct: 9 });
+  const { passedHardFilters, score } = scoreCandidate(stock, m, DEFAULT_STRATEGY_PARAMS);
+  assert.equal(passedHardFilters, false);
+  assert.ok(score < 0.5);
+});
+
+test('pickTopDiverse drops candidates that fail hard filters and sorts survivors by score desc', () => {
+  const pool = [
+    { id: 'A', name: 'A', industry: '半导体', baseMarketCapYi: 100, volatility: 1 },
+    { id: 'B', name: 'B', industry: '半导体', baseMarketCapYi: 100, volatility: 1 },
+    { id: 'C', name: 'C', industry: '医药生物', baseMarketCapYi: 100, volatility: 1 },
+  ];
+  const metricsByStockId = {
+    A: metrics({ stockId: 'A' }), // score 1.0
+    B: metrics({ stockId: 'B', hadLimitUpIn20d: false }), // score < 1.0, still passes hard
+    C: metrics({ stockId: 'C', changePct: 20 }), // fails hard filter -> excluded
+  };
+  const picks = pickTopDiverse(pool, metricsByStockId, DEFAULT_STRATEGY_PARAMS, 3);
+  assert.deepEqual(picks.map(p => p.id), ['A', 'B']); // C excluded, A before B by score
+});
+
+test('pickTopDiverse prefers spreading across industries before repeating one', () => {
+  const pool = [
+    { id: 'A', name: 'A', industry: '半导体', baseMarketCapYi: 100, volatility: 1 },
+    { id: 'B', name: 'B', industry: '半导体', baseMarketCapYi: 100, volatility: 1 },
+    { id: 'C', name: 'C', industry: '医药生物', baseMarketCapYi: 100, volatility: 1 },
+  ];
+  // All three pass hard filters and score identically; A > B > C only by pool order.
+  const metricsByStockId = { A: metrics({ stockId: 'A' }), B: metrics({ stockId: 'B' }), C: metrics({ stockId: 'C' }) };
+  const picks = pickTopDiverse(pool, metricsByStockId, DEFAULT_STRATEGY_PARAMS, 2);
+  const industries = picks.map(p => p.industry);
+  assert.equal(new Set(industries).size, 2); // took one from each industry, not both from 半导体
+});
+
+test('selectDailyPicks orchestrates metrics generation + scoring deterministically for a fixed seed', () => {
+  const rng = createRng(11);
+  const pool = createStockPool(createRng(11), 20);
+  const picksA = selectDailyPicks(pool, DEFAULT_STRATEGY_PARAMS, createRng(99), 3);
+  const picksB = selectDailyPicks(pool, DEFAULT_STRATEGY_PARAMS, createRng(99), 3);
+  assert.deepEqual(picksA.map(p => p.id), picksB.map(p => p.id));
+  assert.ok(picksA.length <= 3);
+});

@@ -55,3 +55,83 @@ export function generateDailyMetrics(stock, rng) {
     closePrice,
   };
 }
+
+export const DEFAULT_STRATEGY_PARAMS = Object.freeze({
+  changePctMin: 3, changePctMax: 5,
+  volumeRatioMin: 1.4,
+  marketCapMinYi: 50, marketCapMaxYi: 200,
+  turnoverMinPct: 5, turnoverMaxPct: 10,
+  maxSingleStockPct: 20,
+  maxTotalPositionPct: 50,
+  maxHoldings: 3,
+  takeProfitOpenPctMin: 2,
+  stopLossOpenPct: -1.5,
+});
+
+export function scoreCandidate(stock, metrics, params) {
+  const reasons = [];
+  const hardChecks = [
+    { pass: metrics.changePct >= params.changePctMin && metrics.changePct <= params.changePctMax,
+      reason: `涨幅${metrics.changePct.toFixed(1)}%（要求${params.changePctMin}%~${params.changePctMax}%）` },
+    { pass: metrics.volumeRatio >= params.volumeRatioMin,
+      reason: `量比${metrics.volumeRatio.toFixed(2)}（要求>${params.volumeRatioMin}）` },
+    { pass: metrics.marketCapYi >= params.marketCapMinYi && metrics.marketCapYi <= params.marketCapMaxYi,
+      reason: `流通市值${metrics.marketCapYi.toFixed(0)}亿（要求${params.marketCapMinYi}~${params.marketCapMaxYi}亿）` },
+    { pass: metrics.turnoverPct >= params.turnoverMinPct && metrics.turnoverPct <= params.turnoverMaxPct,
+      reason: `换手率${metrics.turnoverPct.toFixed(1)}%（要求${params.turnoverMinPct}%~${params.turnoverMaxPct}%）` },
+  ];
+  const passedHardFilters = hardChecks.every(c => c.pass);
+  hardChecks.forEach(c => { if (c.pass) reasons.push(c.reason); });
+
+  const softFlags = [
+    [metrics.hadLimitUpIn20d, '20日内有过涨停'],
+    [metrics.aboveAvgLine, '全天站稳均价线上方'],
+    [metrics.above5And10Day, '站稳5日/10日线'],
+    [metrics.volumeStepPattern, '成交量台阶式放量'],
+    [metrics.inTopHotSector, `属于今日热点板块「${stock.industry}」前三`],
+  ];
+  let softScore = 0;
+  softFlags.forEach(([flag, reason]) => { if (flag) { softScore += 1; reasons.push(reason); } });
+
+  const score = passedHardFilters
+    ? 0.5 + (softScore / softFlags.length) * 0.5
+    : (softScore / softFlags.length) * 0.3;
+
+  return { passedHardFilters, score: Number(score.toFixed(3)), reasons };
+}
+
+export function pickTopDiverse(pool, metricsByStockId, params, count = 3) {
+  const scored = pool
+    .map(stock => {
+      const metrics = metricsByStockId[stock.id];
+      const { passedHardFilters, score, reasons } = scoreCandidate(stock, metrics, params);
+      return { ...stock, ...metrics, passedHardFilters, score, reasons };
+    })
+    .filter(c => c.passedHardFilters)
+    .sort((a, b) => b.score - a.score);
+
+  const picks = [];
+  const usedIndustries = new Set();
+  for (const c of scored) {
+    if (picks.length >= count) break;
+    if (usedIndustries.has(c.industry)) continue;
+    picks.push(c);
+    usedIndustries.add(c.industry);
+  }
+  if (picks.length < count) {
+    for (const c of scored) {
+      if (picks.length >= count) break;
+      if (picks.includes(c)) continue;
+      picks.push(c);
+    }
+  }
+  return picks;
+}
+
+export function selectDailyPicks(pool, params, rng, count = 3) {
+  const metricsByStockId = {};
+  for (const stock of pool) {
+    metricsByStockId[stock.id] = generateDailyMetrics(stock, rng);
+  }
+  return pickTopDiverse(pool, metricsByStockId, params, count);
+}

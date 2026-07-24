@@ -231,7 +231,7 @@ function resolveSellOutcome(position, nextDayChangePct, params) {
   const ruleTriggered = classifyOutcome(nextDayChangePct, params);
   const pnlAmount = Number(((sellPrice - position.buyPrice) * position.shares).toFixed(2));
   const pnlPct = Number((((sellPrice - position.buyPrice) / position.buyPrice) * 100).toFixed(2));
-  return { stockId: position.stockId, name: position.name, buyPrice: position.buyPrice, sellPrice, pnlAmount, pnlPct, ruleTriggered };
+  return { stockId: position.stockId, name: position.name, industry: position.industry, buyPrice: position.buyPrice, sellPrice, pnlAmount, pnlPct, ruleTriggered };
 }
 
 function createInitialState(initialCapital, strategyParams = DEFAULT_STRATEGY_PARAMS) {
@@ -461,6 +461,52 @@ function renderSettingsPanel(container) {
   };
 }
 
+function renderEquityChart(container) {
+  const points = [{ day: 0, capital: AppState.initialCapital }, ...AppState.history.map(h => ({ day: h.day, capital: h.capitalAfter }))];
+  if (points.length < 2) {
+    container.innerHTML = '<h2>资金曲线</h2><p style="color:var(--muted)">至少完成一天交易后开始显示曲线。</p>';
+    return;
+  }
+  const width = 880, height = 220, padding = 32;
+  const capitals = points.map(p => p.capital);
+  const minCap = Math.min(...capitals), maxCap = Math.max(...capitals);
+  const capRange = maxCap - minCap || 1;
+  const xFor = i => padding + (i / (points.length - 1)) * (width - 2 * padding);
+  const yFor = c => height - padding - ((c - minCap) / capRange) * (height - 2 * padding);
+  const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(i).toFixed(1)} ${yFor(p.capital).toFixed(1)}`).join(' ');
+  const last = points[points.length - 1].capital;
+  const lineColor = last >= AppState.initialCapital ? 'var(--up)' : 'var(--down)';
+  container.innerHTML = `
+    <h2>资金曲线</h2>
+    <svg viewBox="0 0 ${width} ${height}" style="width:100%; height:auto;">
+      <line x1="${padding}" y1="${yFor(AppState.initialCapital).toFixed(1)}" x2="${width - padding}" y2="${yFor(AppState.initialCapital).toFixed(1)}" stroke="var(--border)" stroke-dasharray="4 4" />
+      <path d="${path}" fill="none" stroke="${lineColor}" stroke-width="2" />
+    </svg>
+  `;
+}
+
+function renderHistoryTable(container) {
+  if (AppState.history.length === 0) {
+    container.innerHTML = '<h2>历史交易记录</h2><p style="color:var(--muted)">暂无记录。</p>';
+    return;
+  }
+  const rows = AppState.history.slice().reverse().map(h => `
+    <tr>
+      <td>第${h.day}天</td>
+      <td>${h.results.map(r => `${r.name}(${r.industry || ''})`).join('、')}</td>
+      <td class="${h.totalPnlAmount >= 0 ? 'pnl-up' : 'pnl-down'}">¥${fmtMoney(h.totalPnlAmount)} (${fmtPct(h.totalPnlPct)})</td>
+      <td>${h.winCount}/${h.results.length}</td>
+    </tr>
+  `).join('');
+  container.innerHTML = `
+    <h2>历史交易记录</h2>
+    <table style="width:100%; border-collapse:collapse; font-size:13px;">
+      <thead><tr><th style="text-align:left">天数</th><th style="text-align:left">股票</th><th style="text-align:left">当日盈亏</th><th style="text-align:left">胜率</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
 function render() {
   renderStatusBar();
   const main = document.getElementById('main-panel');
@@ -471,6 +517,8 @@ function render() {
   } else {
     renderSelectionPhase(main);
   }
+  renderEquityChart(document.getElementById('chart-panel'));
+  renderHistoryTable(document.getElementById('history-panel'));
   renderSettingsPanel(document.getElementById('settings-panel'));
 }
 

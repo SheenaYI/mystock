@@ -189,7 +189,7 @@ export function resolveSellOutcome(position, nextDayChangePct, params) {
   const ruleTriggered = classifyOutcome(nextDayChangePct, params);
   const pnlAmount = Number(((sellPrice - position.buyPrice) * position.shares).toFixed(2));
   const pnlPct = Number((((sellPrice - position.buyPrice) / position.buyPrice) * 100).toFixed(2));
-  return { stockId: position.stockId, name: position.name, buyPrice: position.buyPrice, sellPrice, pnlAmount, pnlPct, ruleTriggered };
+  return { stockId: position.stockId, name: position.name, industry: position.industry, buyPrice: position.buyPrice, sellPrice, pnlAmount, pnlPct, ruleTriggered };
 }
 
 export function createInitialState(initialCapital, strategyParams = DEFAULT_STRATEGY_PARAMS) {

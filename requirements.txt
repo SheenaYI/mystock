@@ -1,0 +1,4 @@
+typer
+pyyaml
+python-dotenv
+pytest

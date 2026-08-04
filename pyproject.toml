@@ -5,16 +5,23 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mystock"
 version = "0.1.0"
-description = "Quantitative research toolkit — data acquisition CLI (Phase 1)"
+description = "Quantitative research toolkit — data acquisition CLI"
 requires-python = ">=3.12"
 dependencies = [
     "typer",
     "pyyaml",
     "python-dotenv",
+    "akshare",
+    "pandas",
+    "pyarrow",
+    "duckdb",
 ]
 
 [project.scripts]
-mystock = "mystock.cli:app"
+mystock = "cli:app"
+
+[tool.setuptools]
+py-modules = ["cli"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

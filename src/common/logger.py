@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.yaml"
 
 
@@ -29,9 +29,8 @@ def get_logger(name: str) -> logging.Logger:
     root = logging.getLogger("mystock")
     if not root.handlers:
         handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-        )
+        fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        handler.setFormatter(logging.Formatter(fmt))
         root.addHandler(handler)
     root.setLevel(level)
 

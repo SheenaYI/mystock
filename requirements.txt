@@ -1,4 +1,8 @@
 typer
 pyyaml
 python-dotenv
+akshare
+pandas
+pyarrow
+duckdb
 pytest

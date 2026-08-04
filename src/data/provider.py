@@ -13,5 +13,8 @@ class DataProvider:
     """Base class for all data providers."""
 
     def fetch(self, *args: Any, **kwargs: Any) -> Any:
-        """Fetch raw data from the provider. Must be implemented by subclasses."""
+        """Fetch raw data from the provider.
+
+        Must be implemented by subclasses.
+        """
         raise NotImplementedError

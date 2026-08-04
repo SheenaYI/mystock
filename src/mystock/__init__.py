@@ -1,1 +1,0 @@
-"""mystock: quantitative research toolkit."""

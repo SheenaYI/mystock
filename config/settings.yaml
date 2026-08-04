@@ -7,3 +7,16 @@ storage:
 
 logging:
   level: INFO
+
+research:
+  universe:
+    top_n: 800
+    min_history_days: 250
+  benchmark: "000300.SH"
+  train_start: "2015-01-01"
+  train_end: "2024-12-31"
+  holdout_start: "2025-01-01"
+  fee_rate: 0.0025
+  rebalance_days: 20
+  top_pct: 0.10
+  report_dir: data/warehouse/reports

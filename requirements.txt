@@ -5,4 +5,10 @@ akshare
 pandas
 pyarrow
 duckdb
+vectorbt
+quantstats-reloaded
+plotly
+pydantic
+openai
+socksio
 pytest

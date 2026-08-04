@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mystock"
 version = "0.1.0"
-description = "Quantitative research toolkit — data acquisition CLI"
+description = "AI-assisted quant research toolkit"
 requires-python = ">=3.12"
 dependencies = [
     "typer",
@@ -15,6 +15,12 @@ dependencies = [
     "pandas",
     "pyarrow",
     "duckdb",
+    "vectorbt",
+    "quantstats-reloaded",
+    "plotly",
+    "pydantic",
+    "openai",
+    "socksio",
 ]
 
 [project.scripts]

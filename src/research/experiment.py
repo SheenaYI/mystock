@@ -18,19 +18,27 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from research.registry import FACTOR_REGISTRY, UnsupportedFactorError
 
 
 class ExperimentDefinition(BaseModel):
     """LLM-controllable knobs for a single research run."""
 
-    factor: Literal["momentum_20d"] = "momentum_20d"
+    factor: str = "momentum_20d"
     top_pct: float = Field(0.10, gt=0, le=0.5)
     rebalance_days: int = Field(20, gt=0, le=120)
     fee_rate: float = Field(0.0025, ge=0, le=0.02)
     benchmark: str = "000300.SH"
+
+    @field_validator("factor")
+    @classmethod
+    def _factor_must_be_registered(cls, value: str) -> str:
+        if value not in FACTOR_REGISTRY:
+            raise UnsupportedFactorError(value)
+        return value
 
 
 class ExperimentLog:

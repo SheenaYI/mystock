@@ -23,15 +23,14 @@ from data.akshare import AKShareProvider
 from data.storage import ParquetStorage
 from research.engines.vectorbt_engine import VectorBTEngine
 from research.experiment import ExperimentDefinition, ExperimentLog
-from research.factors.momentum import MomentumFactor
 from research.llm import LLMClient
+from research.registry import FACTOR_REGISTRY
+from research.report_builder import build_consolidated_report
 from research.reports.quantstats_report import QuantStatsReport
 from research.strategies.top_pct import TopPctStrategy
 from research.universe import build_clean_universe
 
 logger = get_logger(__name__)
-
-_FACTORS = {"momentum_20d": MomentumFactor}
 
 
 @dataclass
@@ -44,6 +43,7 @@ class PipelineResult:
     holdout_metrics: dict
     train_report_path: Path
     holdout_report_path: Path
+    consolidated_report_path: Path
     trial_count: int
     analysis: str
 
@@ -100,7 +100,7 @@ def run(goal_text: str) -> PipelineResult:
     )
 
     panel = _load_price_panel(universe, train_start, holdout_end)
-    factor = _FACTORS[experiment.factor]()
+    factor = FACTOR_REGISTRY[experiment.factor]["cls"]()
     scores = factor.compute(panel)
     strategy = TopPctStrategy(top_pct=experiment.top_pct)
     engine = VectorBTEngine()
@@ -144,6 +144,18 @@ def run(goal_text: str) -> PipelineResult:
         experiment,
     )
 
+    consolidated_report_path = build_consolidated_report(
+        experiment=experiment,
+        universe_size=len(universe),
+        trial_count=trial_count,
+        train_metrics=train_metrics,
+        holdout_metrics=holdout_metrics,
+        train_report_path=train_report_path,
+        holdout_report_path=holdout_report_path,
+        analysis=analysis,
+        out_path=report_dir / f"report_{experiment.factor}.html",
+    )
+
     return PipelineResult(
         experiment=experiment,
         universe_size=len(universe),
@@ -151,6 +163,7 @@ def run(goal_text: str) -> PipelineResult:
         holdout_metrics=holdout_metrics,
         train_report_path=train_report_path,
         holdout_report_path=holdout_report_path,
+        consolidated_report_path=consolidated_report_path,
         trial_count=trial_count,
         analysis=analysis,
     )

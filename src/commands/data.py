@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+import json
 
 import duckdb
 import typer
@@ -11,7 +12,11 @@ import typer
 from common.logger import PROJECT_ROOT, get_logger, load_settings
 from data.akshare import AKShareProvider
 from data.downloader import Downloader
+from data.manifest import build_ohlcv_manifest, write_ohlcv_manifest
+from data.membership_import import convert_snapshot_archive
 from data.storage import ParquetStorage
+from data.joinquant_tradability import audit_tradability_coverage, import_export, merge_supplement, update_tradability
+from data.repair import repair_symbols
 
 app = typer.Typer(help="Data acquisition commands.")
 logger = get_logger(__name__)
@@ -130,3 +135,129 @@ def status() -> None:
     typer.echo(f"日期范围: {min_date} ~ {max_date}")
     typer.echo(f"总行数: {rows:,}")
     typer.echo(f"磁盘占用: {size_mb:.1f} MB")
+
+
+@app.command("manifest")
+def manifest(
+    price_adjustment: str = typer.Option(
+        ..., help="明确声明数据口径：unadjusted、qfq 或 hfq。程序不会推断。"
+    ),
+    source_name: str = typer.Option("AKShare", help="数据来源名称。"),
+    amount_unit: str = typer.Option("CNY", help="成交额单位。"),
+) -> None:
+    """Hash the existing archive and write its explicit OHLCV manifest."""
+    raw_root = _raw_dir().parent
+    payload = build_ohlcv_manifest(
+        raw_root,
+        price_adjustment=price_adjustment,
+        source_name=source_name,
+        amount_unit=amount_unit,
+    )
+    path = write_ohlcv_manifest(raw_root, payload)
+    typer.echo(f"manifest 已写入: {path}")
+    typer.echo(f"文件数: {payload['file_count']}; 哈希: {payload['files_sha256']}")
+
+
+@app.command("membership-import")
+def membership_import(
+    source_root: Path = typer.Option(..., help="JoinQuant 年度成份股快照目录。"),
+) -> None:
+    """Import an archived snapshot directory into the strict loader format."""
+    output_root = PROJECT_ROOT / "data" / "raw" / "membership" / "csi300"
+    convert_snapshot_archive(source_root, output_root)
+    typer.echo(f"历史成份股已写入: {output_root}")
+
+
+@app.command("tradability-fetch")
+def tradability_fetch(
+    symbols: Optional[str] = typer.Option(None, help="Comma-separated symbols; default is historical CSI300 symbols."),
+    start_date: str = typer.Option("2021-01-01", help="Start date (YYYY-MM-DD)."),
+    end_date: str = typer.Option("2025-12-31", help="End date (YYYY-MM-DD)."),
+    chunk_size: int = typer.Option(50, min=1, max=200, help="JoinQuant symbols per request."),
+) -> None:
+    """Fetch JoinQuant paused/limit fields without changing AKShare OHLCV."""
+    if symbols:
+        target = [item.strip() for item in symbols.split(",") if item.strip()]
+    else:
+        import pandas as pd
+        membership_path = PROJECT_ROOT / "data" / "raw" / "membership" / "csi300" / "historical_index_membership.csv"
+        membership = pd.read_csv(membership_path, dtype=str)
+        target = sorted(membership["symbol"].dropna().unique().tolist())
+    root = PROJECT_ROOT / "data" / "raw" / "tradability_joinquant"
+    try:
+        summary = update_tradability(target, start_date=start_date, end_date=end_date,
+                                     root=root, chunk_size=chunk_size)
+    except RuntimeError as exc:
+        typer.echo(f"错误：{exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"完成: {summary['succeeded']}/{summary['total']} 成功, {len(summary['failed'])} 只股票所属批次失败")
+    typer.echo(f"数据目录: {root}")
+
+
+@app.command("tradability-import")
+def tradability_import(
+    export_root: Path = typer.Option(..., help="聚宽下载的 jq_tradability_export 目录。"),
+) -> None:
+    """Verify and import the manual JoinQuant CSV export into Parquet."""
+    canonical_root = PROJECT_ROOT / "data" / "raw" / "tradability_joinquant"
+    try:
+        manifest = import_export(export_root, canonical_root)
+    except ValueError as exc:
+        typer.echo(f"错误：{exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"导入完成: {manifest['symbol_count']} 只股票, {manifest['row_count']} 条记录")
+    typer.echo(f"规范目录: {canonical_root}")
+
+
+@app.command("tradability-audit")
+def tradability_audit(
+    canonical_root: Path = typer.Option(
+        PROJECT_ROOT / "data" / "raw" / "tradability_joinquant",
+        help="规范化 JoinQuant 可成交档案目录。",
+    ),
+    membership_csv: Path = typer.Option(
+        PROJECT_ROOT / "data" / "raw" / "membership" / "csi300" / "historical_index_membership.csv",
+        help="历史沪深300成分股生效区间 CSV。",
+    ),
+    start_date: str = typer.Option("2021-01-01"),
+    end_date: str = typer.Option("2025-12-31"),
+) -> None:
+    """Audit status-field coverage; incomplete evidence is not inferred."""
+    report = audit_tradability_coverage(
+        canonical_root, membership_csv, start_date=start_date, end_date=end_date
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+    if report["status"] != "complete_for_membership_window":
+        raise typer.Exit(code=2)
+
+
+@app.command("tradability-merge-supplement")
+def tradability_merge_supplement(
+    supplement_root: Path = typer.Option(..., help="补充 CSV 所在目录。"),
+) -> None:
+    """Merge repaired JoinQuant rows with conflict detection."""
+    canonical_root = PROJECT_ROOT / "data" / "raw" / "tradability_joinquant"
+    try:
+        summary = merge_supplement(supplement_root, canonical_root)
+    except ValueError as exc:
+        typer.echo(f"错误：{exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"补充完成: {summary['merged_rows']} 行, {summary['supplement_files']} 个文件; "
+        f"跳过不完整行: {summary['skipped_incomplete_rows']}"
+    )
+
+
+@app.command("repair-missing")
+def repair_missing(
+    symbols: str = typer.Option(..., help="需要重抓的股票代码，逗号分隔。"),
+    start_date: str = typer.Option(..., help="起始日期。"),
+    end_date: str = typer.Option(..., help="结束日期。"),
+) -> None:
+    """Retry missing OHLCV rows without overwriting existing observations."""
+    raw_root = PROJECT_ROOT / "data" / "raw" / "unadjusted_akshare"
+    summary = repair_symbols(
+        [item.strip() for item in symbols.split(",") if item.strip()],
+        raw_root=raw_root, start_date=start_date, end_date=end_date,
+    )
+    typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))

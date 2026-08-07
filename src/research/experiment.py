@@ -16,12 +16,14 @@ after someone starts trusting the numbers.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
 
-from research.registry import FACTOR_REGISTRY, UnsupportedFactorError
+from research.registry_legacy import FACTOR_REGISTRY, UnsupportedFactorError
+from research.contracts.experiment import FrozenExperiment
 
 
 class ExperimentDefinition(BaseModel):
@@ -49,13 +51,14 @@ class ExperimentLog:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def append(
-        self, experiment: ExperimentDefinition, metrics: dict, phase: str
+        self, experiment: FrozenExperiment | ExperimentDefinition, metrics: dict, phase: str
     ) -> None:
         """Record one run: its config, resulting metrics, and phase."""
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "phase": phase,
-            "experiment": experiment.model_dump(),
+            "experiment": experiment.model_dump() if hasattr(experiment, "model_dump") else asdict(experiment) if is_dataclass(experiment) else str(experiment),
+            "contract_hash": getattr(experiment, "contract_hash", None),
             "metrics": metrics,
         }
         with self.path.open("a", encoding="utf-8") as f:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from research.engine import BacktestResult
+from research.backtest.engine import BacktestResult
 
 
 class ReportGenerator:

@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import quantstats as qs
 
-from research.engine import BacktestResult
+from research.backtest.engine import BacktestResult
 from research.report import ReportGenerator
 
 warnings.filterwarnings("ignore")
@@ -26,12 +26,31 @@ class QuantStatsReport(ReportGenerator):
         self, result: BacktestResult, benchmark: pd.Series, out_path: Path
     ) -> Path:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        qs.reports.html(
-            result.returns,
-            benchmark=benchmark,
-            output=str(out_path),
-            title=self.title,
-        )
+        try:
+            qs.reports.html(
+                result.returns,
+                benchmark=benchmark,
+                output=str(out_path),
+                title=self.title,
+            )
+        except Exception as exc:
+            # QuantStats KDE plots fail for short/constant return samples.  A
+            # deterministic table is preferable to losing the whole run.
+            logging.getLogger(__name__).warning("quantstats chart fallback: %s", exc)
+            frame = pd.concat(
+                [result.returns.rename("strategy"), benchmark.rename("benchmark")], axis=1
+            ).dropna(how="all")
+            out_path.write_text(
+                "<html><head><meta charset='utf-8'><title>"
+                + self.title
+                + "</title></head><body><h1>"
+                + self.title
+                + "</h1>"
+                + frame.describe().to_html()
+                + frame.tail(20).to_html()
+                + "</body></html>",
+                encoding="utf-8",
+            )
         return out_path
 
     def metrics(

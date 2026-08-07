@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from research.strategy import Strategy
+from research.portfolio.strategy import Strategy
 
 
 class TopPctStrategy(Strategy):

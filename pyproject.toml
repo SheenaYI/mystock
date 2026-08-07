@@ -15,12 +15,16 @@ dependencies = [
     "pandas",
     "pyarrow",
     "duckdb",
+    "exchange-calendars",
     "vectorbt",
     "quantstats-reloaded",
     "plotly",
     "pydantic",
     "openai",
     "socksio",
+    "lightgbm",
+    "pyqlib",
+    "jqdatasdk",
 ]
 
 [project.scripts]

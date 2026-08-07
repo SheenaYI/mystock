@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import typer
 
-from commands import data, research
+from commands import config, data, research
 
 app = typer.Typer(help="mystock: quantitative research toolkit.")
 app.add_typer(data.app, name="data", help="Data acquisition commands.")
+app.add_typer(config.app, name="config", help="Local credential configuration.")
 app.add_typer(
     research.app, name="research", help="AI-assisted quant research."
 )

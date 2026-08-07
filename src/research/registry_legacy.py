@@ -9,7 +9,7 @@ selectable in one place but not actually wired up in another.
 
 from __future__ import annotations
 
-from research.factors.momentum import MomentumFactor
+from research.factors.momentum_legacy import MomentumFactor
 
 FACTOR_REGISTRY = {
     "momentum_20d": {

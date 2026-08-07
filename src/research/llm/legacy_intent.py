@@ -17,7 +17,7 @@ from openai import OpenAI
 
 from common.logger import get_logger
 from research.experiment import ExperimentDefinition
-from research.registry import FACTOR_REGISTRY, UnsupportedFactorError
+from research.registry_legacy import FACTOR_REGISTRY, UnsupportedFactorError
 
 logger = get_logger(__name__)
 

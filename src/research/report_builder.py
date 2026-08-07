@@ -14,7 +14,7 @@ import html
 from datetime import datetime
 from pathlib import Path
 
-from research.experiment import ExperimentDefinition
+from research.contracts.experiment import FrozenExperiment
 
 _METRIC_LABELS = [
     ("Cumulative Return", "累计收益", "pct"),
@@ -66,15 +66,17 @@ def _analysis_html(analysis_text: str) -> str:
 
 
 def build_consolidated_report(
-    experiment: ExperimentDefinition,
+    experiment: FrozenExperiment,
     universe_size: int,
     trial_count: int,
     train_metrics: dict,
     holdout_metrics: dict,
     train_report_path: Path,
     holdout_report_path: Path,
+    diagnostics_path: Path,
     analysis: str,
     out_path: Path,
+    phase_status: dict[str, dict[str, object]] | None = None,
 ) -> Path:
     """Write the single-file report and return its path."""
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -84,7 +86,7 @@ def build_consolidated_report(
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>mystock 研究报告 - {html.escape(experiment.factor)}</title>
+<title>mystock 研究报告 - {html.escape(experiment.factor_name)}</title>
 <style>
   body {{
     font-family: -apple-system, "PingFang SC", "Microsoft YaHei",
@@ -131,11 +133,12 @@ def build_consolidated_report(
 <body>
 <h1>mystock 研究报告</h1>
 <p class="meta">
-  因子: {html.escape(experiment.factor)} ·
+  因子: {html.escape(experiment.factor_name)} ·
   universe: {universe_size} 只股票 ·
-  调仓周期: {experiment.rebalance_days} 天 ·
-  Top {experiment.top_pct:.0%} ·
-  手续费: {experiment.fee_rate:.2%} ·
+  调仓周期: {experiment.protocol.rebalance_days} 天 ·
+  TopK: {experiment.portfolio.top_k} ·
+  n_drop: {experiment.portfolio.n_drop} ·
+  合同: {experiment.contract_hash[:12]} ·
   第 {trial_count} 次实验 ·
   生成于 {generated_at}
 </p>
@@ -145,8 +148,14 @@ def build_consolidated_report(
 {_analysis_html(analysis)}
 </div>
 
+<h2>运行质量状态</h2>
+<pre>{html.escape(str(phase_status or {}))}</pre>
+
 <h2>关键指标对比（训练期 vs 验证期）</h2>
 {_metrics_table_html(train_metrics, holdout_metrics)}
+
+<h2>分数与相对基准诊断</h2>
+<p><a href="{html.escape(diagnostics_path.name)}">打开 RankIC/ICIR、状态、分位数收益、相对净值与滚动 Beta 诊断</a></p>
 
 <h2>训练期完整图表</h2>
 <iframe src="{train_report_path.name}"></iframe>

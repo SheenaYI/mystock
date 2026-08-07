@@ -66,14 +66,40 @@ class AKShareProvider(DataProvider):
         start_date: str = "1990-01-01",
         end_date: str = "2099-12-31",
     ) -> pd.DataFrame:
-        """Fetch forward-adjusted daily OHLCV history for one symbol."""
+        """Fetch unadjusted daily OHLCV for factor evidence and execution.
+
+        Company-action adjustment is an auditable research operation. A vendor
+        forward-adjusted series cannot be used as a next-open execution price.
+        """
         code, exchange = symbol.split(".")
         sina_symbol = f"{exchange.lower()}{code}"
-        data = ak.stock_zh_a_daily(
-            symbol=sina_symbol,
-            start_date=start_date.replace("-", ""),
-            end_date=end_date.replace("-", ""),
-            adjust="qfq",
-        )
+        try:
+            data = ak.stock_zh_a_daily(
+                symbol=sina_symbol,
+                start_date=start_date.replace("-", ""),
+                end_date=end_date.replace("-", ""),
+                adjust="",
+            )
+        except Exception:
+            # Sina has no rows for some delisted/legacy symbols.  Eastmoney's
+            # historical endpoint is an explicit fallback with the same
+            # unadjusted price contract; failures still propagate to the
+            # downloader's retry/failure ledger.
+            fallback = ak.stock_zh_a_hist(
+                symbol=code,
+                period="daily",
+                start_date=start_date.replace("-", ""),
+                end_date=end_date.replace("-", ""),
+                adjust="",
+            )
+            data = fallback.rename(columns={
+                "日期": "date", "开盘": "open", "收盘": "close", "最高": "high",
+                "最低": "low", "成交量": "volume", "成交额": "amount",
+            })
+            if "date" in data:
+                data["date"] = pd.to_datetime(data["date"]).dt.strftime("%Y-%m-%d")
+            data = data[["date", "open", "high", "low", "close", "volume", "amount"]]
+            data["outstanding_share"] = pd.NA
+            data["turnover"] = pd.NA
         data.insert(0, "symbol", symbol)
         return data[_OUTPUT_COLUMNS]

@@ -36,6 +36,11 @@ mystock data fetch --symbols 600519.SH   # 只拉指定股票，调试用
 mystock data update                      # 增量更新已下载过的股票
 mystock data status                      # 查看本地数据仓库概况
 
+# 本地凭据（只写入 .env，不覆盖行情数据）
+mystock config set-llm                    # 交互式填写 LLM 配置
+mystock config set-joinquant              # 交互式填写聚宽配置
+mystock config status                     # 脱敏查看配置状态
+
 # AI 研究闭环
 mystock research run "研究A股动量策略"     # 一条命令跑完整闭环，输出 HTML 报告 + AI 分析
 ```
@@ -65,6 +70,7 @@ src/
 
 - `config/settings.yaml`：数据路径、存储格式、日志级别，以及 `research` 下的训练期/验证期切分日期、universe 大小、交易成本、调仓周期等——这些是刻意不开放给 LLM 修改的方法论护栏
 - `.env`（不提交到 git）：`LLM_API_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`，OpenAI 兼容接口
+- 聚宽凭据：`JQ_USERNAME` / `JQ_PASSWORD`，仅用于自动抓取历史 `paused`、`high_limit`、`low_limit`；数据写入独立的 `data/raw/tradability_joinquant/`，不会覆盖 AKShare OHLCV
 
 ## 环境限制说明
 

@@ -20,9 +20,14 @@ from typing import Any
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from research.factors.catalog import FACTOR_CATEGORIES, FACTOR_ECONOMIC_MEANINGS
 
 
-PROMPT_VERSION = "react_factor_selector_v1.1.0"
+PROMPT_VERSION = "react_factor_selector_v1.5.0"
+S3_NEXT_PROMPT_VERSION = "react_factor_selector_s3_next_v1.0.0"
+# v1.1 adds optional live literature-index assistance to the standard S4
+# protocol.  The version change intentionally isolates old S4 cache entries.
+S4_PROMPT_VERSION = "react_factor_selector_s4_economic_coverage_v1.2.0"
 
 
 @dataclass(frozen=True)
@@ -35,18 +40,6 @@ class SelectionDecision:
     reason: str = ""
 
 
-_FACTOR_CATEGORIES = {
-    "return_5": "trend", "return_20": "trend", "return_60": "trend",
-    "return_120": "trend", "reversal_5": "trend", "trend_efficiency_60": "trend",
-    "vol_adjusted_return_60": "trend", "ma_gap_5": "trend", "ma_gap_20": "trend",
-    "volatility_20": "risk", "downside_volatility_20": "risk", "drawdown_60": "risk",
-    "intraday_range": "risk", "return_skewness_20": "risk",
-    "volume_ratio_20": "liquidity", "volume_trend_20": "liquidity",
-    "volume_price_corr_20": "liquidity", "illiquidity_20": "liquidity",
-    "high_low_position_60": "price", "return_1": "price",
-}
-
-
 class ReActLiteSelector:
     """Use a real OpenAI-compatible model with a frozen four-round budget."""
 
@@ -57,6 +50,11 @@ class ReActLiteSelector:
         max_rounds: int = 4,
         max_selected: int = 3,
         use_llm: bool = True,
+        prompt_version: str = PROMPT_VERSION,
+        require_literature_refs: bool = False,
+        enforce_marginal_evidence: bool = True,
+        require_economic_rationales: bool = False,
+        min_candidate_coverage: float = 0.95,
     ) -> None:
         if max_rounds < 1:
             raise ValueError("max_rounds must be positive")
@@ -67,6 +65,11 @@ class ReActLiteSelector:
         self.max_rounds = max_rounds
         self.max_selected = max_selected
         self.use_llm = use_llm
+        self.prompt_version = prompt_version
+        self.require_literature_refs = require_literature_refs
+        self.enforce_marginal_evidence = enforce_marginal_evidence
+        self.require_economic_rationales = require_economic_rationales
+        self.min_candidate_coverage = min_candidate_coverage
         load_dotenv()
         self.model = (
             os.getenv("LLM_MODEL")
@@ -108,12 +111,19 @@ class ReActLiteSelector:
         current_factors: tuple[str, ...],
     ) -> SelectionDecision:
         """Observe, assess and decide, stopping at the frozen round limit."""
-        if not candidates:
+        eligible_candidates = self._eligible_candidates(evidence, candidates)
+        if not eligible_candidates:
             self._write_audit(
                 decision_id=decision_id, evidence=evidence, round_no=1,
-                output_kind="abstain", output={"reason": "no_candidates"},
+                output_kind="abstain", output={
+                    "reason": self._no_eligible_reason(),
+                    "candidate_count": len(candidates),
+                },
             )
-            return SelectionDecision(decision_id, state, (), "abstain", 1, "no_candidates")
+            return SelectionDecision(
+                decision_id, state, tuple(current_factors), "abstain", 1,
+                self._no_eligible_reason(),
+            )
 
         prompt_base = self._prompt(
             evidence=evidence, state=state, candidates=candidates,
@@ -129,7 +139,7 @@ class ReActLiteSelector:
                 parsed = self._parse(raw)
                 action, selected, reason = self._validate(
                     parsed, candidates=candidates, current_factors=current_factors,
-                    evidence=evidence,
+                    evidence=evidence, eligible_candidates=eligible_candidates,
                 )
                 self._write_audit(
                     decision_id=decision_id, evidence=evidence, round_no=round_no,
@@ -161,25 +171,100 @@ class ReActLiteSelector:
         self, *, evidence: dict[str, Any], state: str,
         candidates: tuple[str, ...], current_factors: tuple[str, ...],
     ) -> str:
-        return (
+        compact = self._compact_evidence(evidence, candidates)
+        prompt = (
             "你是受限 ReAct-lite 因子选择器。只能在已有固定七因子之外选择扩展因子，"
             "不能改动股票池、标签窗口、LightGBM、TopK、调仓频率或交易成本。\n"
+            "候选菜单按趋势/动量、价格形态/反转、风险/波动、成交量/流动性、相对市场五类登记；"
+            "市场状态变量只是选择依据，不是可自行创造的新因子。\n"
             "请按 observe→assess→decide 思路在内部分析：\n"
             "1) observe：读取当前市场状态、当前配方和历史证据；\n"
-            "2) assess：指出历史支持不足、相关性过高或证据矛盾的因子；\n"
-            "3) decide：只做合法的 add/drop/replace，证据不足就 abstain。\n"
+            "2) assess：指出历史支持不足、相关性过高或证据矛盾的因子；历史语境和预置文献索引"
+            "只能作为辅助，必须检查每条记录发布时间不晚于决策日，不能把事后新闻或新论文当作历史证据；\n"
+            "3) decide：只做合法的 add/drop/replace；证据不足时 abstain。\n"
             f"当前状态：{state}\n"
             f"当前配方（{len(current_factors)} 个）：{list(current_factors)}\n"
-            f"证据：{json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str)}\n"
+            f"压缩证据摘要：{json.dumps(compact, ensure_ascii=False, sort_keys=True, default=str)}\n"
             f"允许新增候选：{list(candidates)}\n"
-            "硬性约束：动作执行后最终配方必须仍有 5–9 个因子；每次最多新增 2 个、删除 2 个、"
+        )
+        if self.enforce_marginal_evidence:
+            prompt += (
+                "硬性约束：只有同时满足整体稳定因子证据、当前市场状态下的稳定因子证据、"
+                "整体至少两折组合边际改善、当前状态下至少两折组合边际改善，且换手/回撤/Beta没有显著恶化，"
+                "才允许 add 或 replace；只提高单因子 IC 不足以执行动作。没有明确证据时默认 abstain。"
+            )
+        else:
+            cards = {name: FACTOR_ECONOMIC_MEANINGS[name] for name in candidates}
+            prompt += (
+                "这是 S4 探索型挑战者：不使用 S3 的两折组合边际改善门槛，但不等于可以随意选因子。"
+                "每个 add 或 replace 必须同时满足：(a) 说明其经济意义及与当前状态的关系；"
+                f"(b) 当前基础配方可交易股票内覆盖率不低于 {self.min_candidate_coverage:.0%}；"
+                "(c) 不与已选或同次新增因子处于同一强相关簇。"
+                "优先构造经济含义互补、跨类别覆盖高、相关性低的稀疏配方；不能同时满足则 abstain。"
+                "预置文献索引只能形成假设，不能被当作收益保证。"
+                "若 action 是 add 或 replace，factor_rationales 必须为每个新增因子各给一条完整对象，"
+                "并且每条都含 factor、economic_meaning、state_relevance、coverage、non_redundancy 五个非空字符串；"
+                "缺任一字段即输出 abstain，不得只在 reason 中笼统说明。"
+                f"因子经济意义卡：{json.dumps(cards, ensure_ascii=False, sort_keys=True)}\n"
+            )
+            if compact.get("live_literature"):
+                prompt += (
+                    "以下是本次实时学术索引检索结果：它们只用于补充研究假设，不是 PIT-safe 历史证据；"
+                    "若实际采用，请在 literature_refs 中记录 source_id。"
+                    f"实时检索结果：{json.dumps(compact['live_literature'], ensure_ascii=False, sort_keys=True)}\n"
+                )
+        return prompt + (
+            "动作执行后最终配方必须仍有 5–9 个因子；每次最多新增 2 个、删除 2 个、"
             "替换 2 个；删除数量不得使配方少于 5 个；新增或替换不得引入相关簇冲突；"
             "固定七因子已有的相关簇重叠可以保留，但不能新增冲突。\n"
+            "若预置文献索引非空，任何 add/drop/replace 都必须在 literature_refs 中引用其中至少一个 source_id；"
+            "文献只说明研究方向，不能作为绕过数值门槛的理由。\n"
             "只输出 JSON，不要 markdown："
             '{"action":"add|drop|replace|abstain", "add":[], "drop":[], '
             '"replace":[{"drop":"factor_old","add":"factor_new"}], '
-            '"reason":"简短理由", "evidence_refs":[]}'
+            '"reason":"简短理由", "evidence_refs":[], "literature_refs":[], '
+            '"factor_rationales":[{"factor":"候选因子", "economic_meaning":"经济含义", '
+            '"state_relevance":"与当前状态的关系", "coverage":"当前覆盖率", "non_redundancy":"与现有配方的互补性"}]}'
         )
+
+    @staticmethod
+    def _compact_evidence(evidence: dict[str, Any], candidates: tuple[str, ...]) -> dict[str, Any]:
+        """Keep the auditable full snapshot local, but send only decision data."""
+        def compact_number(value: Any) -> float | None:
+            try:
+                return round(float(value), 4)
+            except (TypeError, ValueError):
+                return None
+
+        all_evidence = evidence.get("factor_evidence", {})
+        factors: dict[str, Any] = {}
+        for name in candidates:
+            item = all_evidence.get(name, {})
+            state_item = item.get("state_rank_ic", {}).get(evidence.get("current_state", ""), {})
+            factors[name] = {
+                "ic": compact_number(item.get("mean_rank_ic")),
+                "icir": compact_number(item.get("icir")),
+                "coverage": compact_number(item.get("coverage_current")),
+                "state_ic": compact_number(state_item.get("mean_rank_ic")),
+                "state_icir": compact_number(state_item.get("icir")),
+            }
+        return {
+            "decision_date": evidence.get("decision_date"),
+            "mature_through": evidence.get("mature_through"),
+            "mature_observations": evidence.get("mature_observations"),
+            "current_state": evidence.get("current_state"),
+            "market_state_snapshot": evidence.get("market_state_snapshot"),
+            "live_literature": [
+                {
+                    **{key: item.get(key) for key in ("source_id", "title", "published_on", "url")},
+                    "summary": str(item.get("summary", ""))[:320],
+                }
+                for item in evidence.get("live_literature", []) if isinstance(item, dict)
+            ],
+            "correlation_threshold": evidence.get("correlation_threshold"),
+            "correlation_clusters": evidence.get("correlation_clusters"),
+            "candidate_evidence": factors,
+        }
 
     def _chat(self, prompt: str) -> str:
         response = self.client.chat.completions.create(
@@ -209,6 +294,7 @@ class ReActLiteSelector:
     def _validate(
         self, parsed: dict[str, Any], *, candidates: tuple[str, ...],
         current_factors: tuple[str, ...], evidence: dict[str, Any],
+        eligible_candidates: tuple[str, ...] | None = None,
     ) -> tuple[str, tuple[str, ...], str]:
         action = parsed.get("action")
         if action not in {"add", "drop", "replace", "abstain"}:
@@ -228,6 +314,48 @@ class ReActLiteSelector:
             if add or drop or replacements:
                 raise ValueError("abstain must not contain actions")
             return action, current_factors, str(parsed.get("reason", ""))[:1000]
+        if self.require_literature_refs:
+            available_refs = {
+                str(item.get("source_id"))
+                for item in (*evidence.get("frozen_literature", []), *evidence.get("live_literature", []))
+                if isinstance(item, dict) and item.get("source_id")
+            }
+            cited_refs = parsed.get("literature_refs", [])
+            if not isinstance(cited_refs, list) or not all(isinstance(item, str) for item in cited_refs):
+                raise ValueError("S3-next non-abstain actions require literature_refs as a string list")
+            if not set(cited_refs).intersection(available_refs):
+                raise ValueError("S3-next non-abstain actions must cite a retrieved frozen literature source")
+        else:
+            cited_refs = parsed.get("literature_refs", [])
+            if cited_refs:
+                if not isinstance(cited_refs, list) or not all(isinstance(item, str) for item in cited_refs):
+                    raise ValueError("literature_refs must be a string list when supplied")
+                available_refs = {
+                    str(item.get("source_id"))
+                    for item in (*evidence.get("frozen_literature", []), *evidence.get("live_literature", []))
+                    if isinstance(item, dict) and item.get("source_id")
+                }
+                if not set(cited_refs).issubset(available_refs):
+                    raise ValueError("literature_refs must refer to supplied search results")
+        if eligible_candidates is None:
+            eligible_candidates = self._eligible_candidates(evidence, candidates)
+        changed_extensions = add + tuple(replace_add)
+        # The strict S3/S3-next protocol only accepts a drop when the
+        # portfolio-level marginal-evidence gate supports it.  S4 is an
+        # exploratory, coverage-and-economic-meaning constrained protocol;
+        # it may remove a baseline factor without pretending it has a
+        # portfolio marginal test for a newly-added extension.
+        if action == "drop" and not changed_extensions and self.enforce_marginal_evidence:
+            raise ValueError("drop requires explicit marginal portfolio evidence")
+        if any(factor not in eligible_candidates for factor in changed_extensions):
+            if self.enforce_marginal_evidence:
+                raise ValueError(
+                    "add/replace require stable two-fold portfolio marginal improvement "
+                    "with no material turnover/drawdown/beta deterioration"
+                )
+            raise ValueError(
+                f"S4 add/replace require at least {self.min_candidate_coverage:.0%} coverage in the active base universe"
+            )
         if action == "add" and (not add or drop or replacements):
             raise ValueError("add must contain only add factors")
         if action == "drop" and (not drop or add or replacements):
@@ -249,10 +377,64 @@ class ReActLiteSelector:
         selected.extend(replace_add)
         selected = tuple(dict.fromkeys(selected))
         self._validate_recipe(selected, evidence)
+        if self.require_economic_rationales:
+            self._validate_economic_rationales(parsed, changed_extensions)
         reason = str(parsed.get("reason", ""))[:1000]
         if not reason:
             raise ValueError("non-abstain decisions require a reason")
         return action, selected, reason
+
+    def _eligible_candidates(
+        self, evidence: dict[str, Any], candidates: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Apply a fail-closed portfolio-level evidence gate before acting."""
+        if not self.enforce_marginal_evidence:
+            factor_evidence = evidence.get("factor_evidence", {})
+            return tuple(
+                factor for factor in candidates
+                if float(factor_evidence.get(factor, {}).get("coverage_current", 0.0))
+                >= self.min_candidate_coverage
+            )
+        marginal = evidence.get("portfolio_marginal_evidence", {})
+        result: list[str] = []
+        for factor in candidates:
+            item = marginal.get(factor, {})
+            if not isinstance(item, dict):
+                continue
+            if (
+                item.get("factor_evidence_stable") is True
+                and item.get("state_factor_evidence_stable") is True
+                and int(item.get("qualifying_folds", 0)) >= 2
+                and int(item.get("state_qualifying_folds", 0)) >= 2
+                and item.get("portfolio_marginal_improvement") is True
+                and item.get("risk_cost_ok") is True
+                and item.get("state_portfolio_marginal_improvement") is True
+                and item.get("state_risk_cost_ok") is True
+            ):
+                result.append(factor)
+        return tuple(result)
+
+    def _no_eligible_reason(self) -> str:
+        if self.enforce_marginal_evidence:
+            return "no_clear_portfolio_marginal_improvement"
+        return f"no_candidate_with_{self.min_candidate_coverage:.0%}_active_universe_coverage"
+
+    @staticmethod
+    def _validate_economic_rationales(
+        parsed: dict[str, Any], changed_extensions: tuple[str, ...]
+    ) -> None:
+        """Require one complete, logged rationale for every S4 addition."""
+        rationales = parsed.get("factor_rationales", [])
+        if not isinstance(rationales, list) or not all(isinstance(item, dict) for item in rationales):
+            raise ValueError("S4 non-abstain add/replace actions require factor_rationales")
+        by_factor = {item.get("factor"): item for item in rationales}
+        for factor in changed_extensions:
+            item = by_factor.get(factor)
+            if not isinstance(item, dict):
+                raise ValueError(f"S4 rationale missing for {factor}")
+            required = ("economic_meaning", "state_relevance", "coverage", "non_redundancy")
+            if any(not isinstance(item.get(field), str) or not item[field].strip() for field in required):
+                raise ValueError(f"S4 rationale for {factor} is incomplete")
 
     @staticmethod
     def _factor_list(value: Any, field: str) -> tuple[str, ...]:
@@ -264,7 +446,7 @@ class ReActLiteSelector:
     def _validate_recipe(selected: tuple[str, ...], evidence: dict[str, Any]) -> None:
         if not 5 <= len(selected) <= 9:
             raise ValueError("final recipe must contain 5 to 9 factors")
-        categories = {_FACTOR_CATEGORIES.get(factor) for factor in selected}
+        categories = {FACTOR_CATEGORIES.get(factor) for factor in selected}
         if not {"trend", "risk", "liquidity"}.issubset(categories):
             raise ValueError("recipe must cover trend, risk and liquidity")
         clusters = evidence.get("correlation_clusters", [])
@@ -289,7 +471,7 @@ class ReActLiteSelector:
             "call_seq": self._next_call_seq(),
             "decision_id": decision_id,
             "input_snapshot_sha256": hashlib.sha256(snapshot.encode()).hexdigest(),
-            "prompt_version": PROMPT_VERSION,
+            "prompt_version": self.prompt_version,
             "output": output,
             "output_kind": output_kind,
             "consumes_trial_id": False,
@@ -297,6 +479,7 @@ class ReActLiteSelector:
             "round": round_no,
             "evidence": evidence,
             "model": self.model,
+            "enforce_marginal_evidence": self.enforce_marginal_evidence,
         }
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")

@@ -25,6 +25,8 @@ dependencies = [
     "lightgbm",
     "pyqlib",
     "jqdatasdk",
+    "mootdx",
+    "markdown",
 ]
 
 [project.scripts]

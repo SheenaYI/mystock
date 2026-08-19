@@ -67,6 +67,7 @@ def select_model(
     *, features: pd.DataFrame, labels: pd.DataFrame,
     base_config: LightGBMConfig = LightGBMConfig(),
     folds: tuple[DevelopmentFold, ...] = FOLDS,
+    horizon: int = 20,
 ) -> tuple[LightGBMConfig, pd.DataFrame, str]:
     """Select one candidate by three-fold median RankIC, then ICIR.
 
@@ -86,7 +87,7 @@ def select_model(
                 fold_scores.append(np.nan)
                 continue
             valid_start = available[0]
-            mature = mature_labels_as_of(labels, as_of=valid_start, horizon=20)
+            mature = mature_labels_as_of(labels, as_of=valid_start, horizon=horizon)
             train_mask = (mature.index >= pd.Timestamp(fold.train_start)) & (mature.index <= pd.Timestamp(fold.train_end))
             train_labels = mature.loc[train_mask]
             train_long = _long_labels(train_labels)

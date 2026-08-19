@@ -44,6 +44,16 @@ class ProtocolContract:
     locked_end: str = "2025-12-31"
     horizon: int = 20
     rebalance_days: int = 20
+    model_retrain_days: int = 20
+    factor_decision_days: int = 20
+
+    def __post_init__(self) -> None:
+        if min(self.horizon, self.rebalance_days, self.model_retrain_days, self.factor_decision_days) <= 0:
+            raise ValueError("all research clocks must be positive")
+        if self.model_retrain_days % self.rebalance_days:
+            raise ValueError("model_retrain_days must be a whole number of rebalance intervals")
+        if self.factor_decision_days % self.rebalance_days:
+            raise ValueError("factor_decision_days must be a whole number of rebalance intervals")
 
 
 @dataclass(frozen=True)
@@ -129,6 +139,9 @@ class FrozenExperiment:
             "s1": "technical_s1_deterministic",
             "s2": "technical_s2_state_mapping",
             "s3": "technical_s3_react_lite",
+            "s3_next": "technical_s3_next_literature_challenger",
+            "s4": "technical_s4_w1_economic_coverage_n5",
+            "s4_n2": "technical_s4_w1_economic_coverage_n2",
         }
         try:
             return names[self.profile]

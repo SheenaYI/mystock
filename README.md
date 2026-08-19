@@ -34,7 +34,10 @@ mystock --help
 mystock data fetch --universe all        # 全市场全历史（默认，可断点续传）
 mystock data fetch --symbols 600519.SH   # 只拉指定股票，调试用
 mystock data update                      # 增量更新已下载过的股票
+mystock data supplement --source a-stock-data --symbols 600000.SH,000001.SZ \
+  --start-date 2025-01-01 --end-date 2025-12-31  # 补充源审计，不覆盖 AKShare
 mystock data status                      # 查看本地数据仓库概况
+mystock research context-search --query "沪深300 波动率" --cutoff-date 2024-12-31  # 受日期约束的历史语境归档
 
 # 本地凭据（只写入 .env，不覆盖行情数据）
 mystock config set-llm                    # 交互式填写 LLM 配置

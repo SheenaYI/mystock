@@ -1,4 +1,4 @@
-"""The complete frozen 20-factor technical menu and correlation clusters."""
+"""Technical factor panels and correlation clusters."""
 
 from __future__ import annotations
 
@@ -44,6 +44,49 @@ def technical_20_features(*, close: pd.DataFrame, high: pd.DataFrame, low: pd.Da
     ext = ext.stack("instrument", future_stack=True)
     ext.index.names = ["datetime", "instrument"]
     return pd.concat([base, ext], axis=1).sort_index(axis=1)
+
+
+def technical_25_features(
+    *, close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame,
+    volume: pd.DataFrame, amount: pd.DataFrame, benchmark_close: pd.Series,
+) -> pd.DataFrame:
+    """Return the five-family technical menu used by the new S3 design.
+
+    The original twenty-factor builder remains available for reproducing old
+    reports.  This builder adds relative-market candidates without changing
+    any baseline factor formula.  Industry-relative strength is intentionally
+    not fabricated here because no historical industry membership archive is
+    currently bound to the research contract.
+    """
+    base20 = technical_20_features(
+        close=close, high=high, low=low, volume=volume, amount=amount,
+    )
+    benchmark = pd.to_numeric(benchmark_close, errors="coerce").reindex(close.index)
+    stock_daily = close.pct_change()
+    market_daily = benchmark.pct_change()
+    ret20 = close.pct_change(20)
+    ret60 = close.pct_change(60)
+    market_ret20 = benchmark.pct_change(20)
+    market_ret60 = benchmark.pct_change(60)
+    beta60 = stock_daily.apply(
+        lambda series: series.rolling(60).cov(market_daily), axis=0,
+    ).div(market_daily.rolling(60).var(), axis=0)
+    stock_vol60 = stock_daily.rolling(60).std()
+    market_vol60 = market_daily.rolling(60).std()
+    market_corr60 = beta60.mul(market_vol60, axis=0).div(stock_vol60)
+    residual_daily = stock_daily.sub(beta60.mul(market_daily, axis=0))
+    relative = {
+        "beta_60": beta60,
+        "market_corr_60": market_corr60,
+        "idiosyncratic_return_20": ret20.sub(beta60.mul(market_ret20, axis=0)),
+        "idiosyncratic_return_60": ret60.sub(beta60.mul(market_ret60, axis=0)),
+        "residual_volatility_60": residual_daily.rolling(60).std(),
+    }
+    wide = pd.concat(relative, axis=1)
+    wide.columns.names = ["feature", "instrument"]
+    relative_long = wide.stack("instrument", future_stack=True)
+    relative_long.index.names = ["datetime", "instrument"]
+    return pd.concat([base20, relative_long], axis=1).sort_index(axis=1)
 
 
 def strong_correlation_clusters(features: pd.DataFrame, threshold: float = 0.80) -> tuple[frozenset[str], ...]:

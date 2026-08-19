@@ -15,4 +15,6 @@ socksio
 lightgbm
 pyqlib
 jqdatasdk
+mootdx
 pytest
+markdown

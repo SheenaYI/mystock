@@ -30,28 +30,48 @@ from research.diagnostics import (
 )
 from research.portfolio.benchmark_clock import aligned_close_benchmark_returns
 from research.portfolio.costs import CostModel
-from research.backtest.engine import MarketPrices
+from research.backtest.engine import BacktestResult, MarketPrices
 from research.backtest.lot_ledger_engine import ExecutionPolicy, LotLedgerEngine
 from research.backtest.corporate_action_adapter import load_snapshot_actions
-from research.contracts.experiment import FrozenExperiment, build_evidence_contract
+from research.contracts.experiment import (
+    FrozenExperiment, ProtocolContract,
+    PortfolioContract,
+    build_evidence_contract,
+)
 from research.experiment import ExperimentLog
 from research.factors.extended import (
     select_high_coverage_low_redundancy,
-    technical_20_features,
+    technical_25_features,
 )
-from research.labels import forward_excess_return_20d
+from research.factors.catalog import BASE_FACTORS
+from research.labels import forward_excess_return
 from research.llm.report_explainer import ReportExplainer
-from research.llm.react_lite import ReActLiteSelector
+from research.llm.react_lite import (
+    PROMPT_VERSION, S3_NEXT_PROMPT_VERSION, S4_PROMPT_VERSION, ReActLiteSelector,
+)
+from research.llm.live_literature import retrieve_live_literature
 from research.llm.evidence import build_factor_evidence
+from research.llm.evidence_cache import EvidenceCache
+from research.llm.historical_context import load_context_as_of
+from research.llm.literature_registry import retrieve_literature_as_of
 from research.models.rolling import rolling_qlib_scores
 from research.models.model_selection import select_model
-from research.state import classify_market_state
+from research.state import classify_market_state, market_state_snapshot
 from research.report_builder import build_consolidated_report
 from research.reports.quantstats_report import QuantStatsReport
+from research.reports.paths import profile_diagnostics_dir, profile_report_dir
 from research.portfolio.topk_dropout import TopKDropoutStrategy
 from research.universe import load_historical_universe
 
 logger = get_logger(__name__)
+
+
+def _format_metric(value: object, kind: str) -> str:
+    """Format one report annotation metric without failing a completed run."""
+    try:
+        return f"{float(value):.1%}" if kind == "pct" else f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "暂无有效值"
 
 
 @dataclass
@@ -66,23 +86,35 @@ class PipelineResult:
     holdout_report_path: Path
     locked_metrics: dict
     locked_report_path: Path
+    continuous_report_path: Path
     consolidated_report_path: Path
     diagnostics_path: Path
     trial_count: int
     analysis: str
 
 
-BASE_FACTORS = (
-    "return_5", "return_20", "return_60", "ma_gap_20", "volatility_20",
-    "volume_ratio_20", "intraday_range",
-)
+def _factor_selection_namespace(experiment: FrozenExperiment) -> str:
+    """Return a cache key for factor decisions, independent of S4 turnover.
+
+    S4-W1-n2 and S4-W1-n5 are a paired portfolio experiment.  Their LLM
+    decisions must be identical; otherwise the two return series would mix
+    turnover with a second stochastic factor-selection draw.
+    """
+    if experiment.profile in {"s4", "s4_n2"}:
+        return replace(
+            experiment, profile="s4", portfolio=PortfolioContract(),
+        ).contract_hash
+    return experiment.contract_hash
 
 
 def _profile_features(
     *, profile: str, features: pd.DataFrame, benchmark_prices: pd.DataFrame,
+    stock_close: pd.DataFrame,
     decision_dates: pd.DatetimeIndex, base_factors: tuple[str, ...],
     labels: pd.DataFrame, llm_start: pd.Timestamp | None = None,
-    llm_end: pd.Timestamp | None = None,
+    llm_end: pd.Timestamp | None = None, cache_namespace: str | None = None,
+    model_config=None, horizon: int = 20, factor_decision_days: int = 20,
+    rebalance_days: int = 20,
 ) -> dict[pd.Timestamp, tuple[str, ...]]:
     """Build one common date->factor mapping for S0/S1/S2/S3."""
     candidates = tuple(column for column in features.columns if column not in base_factors)
@@ -90,7 +122,7 @@ def _profile_features(
         """Drop only low-coverage extensions for this decision date."""
         row = features.xs(date, level="datetime")
         eligible = row[list(base_factors)].notna().all(axis=1)
-        if profile == "s3":
+        if profile in {"s3", "s3_next", "s4", "s4_n2"}:
             # S3 actions are authoritative: a dropped/replaced baseline must
             # not be silently reintroduced by the warm-up guard used by S0-S2.
             return tuple(
@@ -130,15 +162,41 @@ def _profile_features(
             )
             for date in decision_dates
         }
-    if profile == "s3":
-        selector = ReActLiteSelector(PROJECT_ROOT / "data" / "warehouse" / "llm_calls.jsonl")
-        selected_by_date: dict[pd.Timestamp, tuple[str, ...]] = {}
-        for date in decision_dates:
+    if profile in {"s3", "s3_next", "s4", "s4_n2"}:
+        is_challenger = profile == "s3_next"
+        is_s4 = profile in {"s4", "s4_n2"}
+        if factor_decision_days % rebalance_days:
+            raise ValueError("factor_decision_days must be a whole number of rebalance intervals")
+        action_dates = decision_dates[:: factor_decision_days // rebalance_days]
+        selector = ReActLiteSelector(
+            PROJECT_ROOT / "data" / "warehouse" / "llm_calls.jsonl",
+            prompt_version=(S4_PROMPT_VERSION if is_s4 else S3_NEXT_PROMPT_VERSION if is_challenger else PROMPT_VERSION),
+            # S3-next is the literature-constrained challenger.  S4 may use
+            # retrieved literature as supporting context, but an empty local
+            # archive must not turn a valid market-state decision into an
+            # artificial failure.
+            require_literature_refs=is_challenger,
+            enforce_marginal_evidence=not is_s4,
+            require_economic_rationales=is_s4,
+        )
+        evidence_namespace = f"{cache_namespace or 'uncached'}-{selector.prompt_version}"
+        evidence_cache = EvidenceCache(
+            PROJECT_ROOT / "data" / "warehouse" / "cache" / "evidence",
+            evidence_namespace,
+        )
+        # Prompt/action contract changes must never replay decisions produced
+        # under an older selector protocol.  Keep the old cache for audit, but
+        # put new decisions in a versioned namespace.
+        decision_namespace = evidence_namespace
+        decision_cache_root = PROJECT_ROOT / "data" / "warehouse" / "cache" / "decisions" / decision_namespace
+        decision_cache_root.mkdir(parents=True, exist_ok=True)
+        selected_on_action_date: dict[pd.Timestamp, tuple[str, ...]] = {}
+        for date in action_dates:
             # Smoke runs can restrict real LLM calls to a validation window;
             # dates outside it remain on the frozen seven-factor baseline.
             if ((llm_start is not None and pd.Timestamp(date) < llm_start)
                     or (llm_end is not None and pd.Timestamp(date) > llm_end)):
-                selected_by_date[pd.Timestamp(date)] = with_date_coverage(
+                selected_on_action_date[pd.Timestamp(date)] = with_date_coverage(
                     pd.Timestamp(date), tuple(base_factors)
                 )
                 continue
@@ -146,15 +204,21 @@ def _profile_features(
             # seven-factor baseline.  A previous period's add/drop/replace
             # recipe must not silently become the next period's baseline.
             current_recipe = tuple(base_factors)
-            state = classify_market_state(benchmark_prices.loc[:date, "close"])
+            state_snapshot = market_state_snapshot(
+                benchmark_close=benchmark_prices["close"],
+                stock_close=stock_close,
+                as_of=pd.Timestamp(date),
+            )
+            state = str(state_snapshot["state"])
             row = features.xs(pd.Timestamp(date), level="datetime")
+            base_eligible = row[list(base_factors)].notna().all(axis=1)
             coverage = {
-                factor: round(float(row[factor].notna().mean()), 4)
+                factor: round(float(row.loc[base_eligible, factor].notna().mean()), 4)
                 for factor in candidates
             }
-            decision = selector.decide(
-                decision_id=f"factor-selection-{date.date()}", state=state,
-                evidence={
+            evidence = evidence_cache.get_or_build(
+                str(pd.Timestamp(date).date()),
+                lambda: {
                     **build_factor_evidence(
                         features=features,
                         labels=labels,
@@ -162,19 +226,57 @@ def _profile_features(
                         as_of=pd.Timestamp(date),
                         base_factors=base_factors,
                         candidates=candidates,
+                        state_snapshot=state_snapshot,
+                        historical_context=load_context_as_of(
+                            PROJECT_ROOT / "data" / "raw" / "historical_context.jsonl",
+                            cutoff_date=pd.Timestamp(date),
+                        ),
+                        model_config=model_config,
+                        horizon=horizon,
+                        include_portfolio_marginal=not is_s4,
                     ),
                     "decision_date": str(date.date()),
                     "candidate_count": len(candidates),
                     "candidate_names": list(candidates),
                     "candidate_coverage": coverage,
                     "base_factors": list(base_factors),
+                    "frozen_literature": retrieve_literature_as_of(
+                        as_of=pd.Timestamp(date), state=state, candidates=candidates,
+                    ) if is_challenger else [],
+                    "live_literature": retrieve_live_literature(
+                        as_of=str(pd.Timestamp(date).date()), state=state,
+                        cache_root=PROJECT_ROOT / "data" / "warehouse" / "cache" / "live_literature",
+                    ) if is_s4 else [],
                 },
-                candidates=candidates,
-                current_factors=current_recipe,
             )
+            decision_id = f"factor-selection-{date.date()}"
+            decision_path = decision_cache_root / f"{date.date()}.json"
+            if decision_path.is_file():
+                from research.llm.react_lite import SelectionDecision
+                cached_decision = json.loads(decision_path.read_text(encoding="utf-8"))
+                decision = SelectionDecision(
+                    decision_id=decision_id, state=state,
+                    selected=tuple(cached_decision["selected"]),
+                    action=cached_decision["action"],
+                    rounds=int(cached_decision["rounds"]),
+                    reason=cached_decision.get("reason", "cached"),
+                )
+            else:
+                decision = selector.decide(
+                    decision_id=decision_id, state=state, evidence=evidence,
+                    candidates=candidates, current_factors=current_recipe,
+                )
+                decision_path.write_text(json.dumps({
+                    "selected": list(decision.selected), "action": decision.action,
+                    "rounds": decision.rounds, "reason": decision.reason,
+                }, ensure_ascii=False, sort_keys=True), encoding="utf-8")
             current_recipe = decision.selected
-            selected_by_date[pd.Timestamp(date)] = with_date_coverage(pd.Timestamp(date), current_recipe)
-        return selected_by_date
+            selected_on_action_date[pd.Timestamp(date)] = with_date_coverage(pd.Timestamp(date), current_recipe)
+        action_index = pd.DatetimeIndex(selected_on_action_date)
+        return {
+            pd.Timestamp(date): selected_on_action_date[action_index[action_index <= date][-1]]
+            for date in decision_dates
+        }
     raise ValueError(f"unknown experiment profile: {profile}")
 
 
@@ -274,16 +376,26 @@ def run(
 ) -> PipelineResult:
     """Run the frozen technical-baseline contract; no LLM sets methodology."""
     settings = load_settings().get("research", {})
-    preliminary_experiment = FrozenExperiment(profile=profile, tradability_mode=tradability_mode)
+    is_s4_weekly = profile in {"s4", "s4_n2"}
+    protocol = (
+        ProtocolContract(horizon=5, rebalance_days=5, model_retrain_days=20, factor_decision_days=20)
+        if is_s4_weekly else ProtocolContract()
+    )
+    portfolio = PortfolioContract(n_drop=2) if profile in {"s3_next", "s4_n2"} else PortfolioContract()
+    preliminary_experiment = FrozenExperiment(
+        profile=profile, protocol=protocol, tradability_mode=tradability_mode, portfolio=portfolio,
+    )
     train_start = preliminary_experiment.protocol.train_start
     train_end = "2023-12-31"
     holdout_start = preliminary_experiment.protocol.validation_start
     holdout_end = preliminary_experiment.protocol.validation_end
     locked_end = preliminary_experiment.protocol.locked_end
     universe_cfg = settings.get("universe", {})
-    report_dir = PROJECT_ROOT / settings.get(
+    report_root = PROJECT_ROOT / settings.get(
         "report_dir", "data/warehouse/reports"
     )
+    report_dir = profile_report_dir(report_root, profile)
+    report_dir.mkdir(parents=True, exist_ok=True)
     execution_dir = PROJECT_ROOT / "data" / "warehouse" / "execution"
     execution_dir.mkdir(parents=True, exist_ok=True)
     log_path = PROJECT_ROOT / "data" / "warehouse" / "experiments.jsonl"
@@ -294,7 +406,7 @@ def run(
     membership_manifest = PROJECT_ROOT / "data" / "raw" / "membership" / "csi300" / "historical_index_membership_manifest.json"
     action_manifest = PROJECT_ROOT / "data" / "raw" / "corporate_actions_akshare" / "manifest.json"
     experiment = FrozenExperiment(
-        profile=profile,
+        profile=profile, protocol=protocol, portfolio=portfolio,
         tradability_mode=tradability_mode,
         evidence=build_evidence_contract(
             raw_root=raw_root, membership_manifest=membership_manifest,
@@ -348,38 +460,50 @@ def run(
     # A zero/missing turnover observation is not silently repaired.  It makes
     # that stock-date unavailable for selection and execution.
     membership_mask = membership_mask & ~invalid_amount
-    features = technical_20_features(
+    benchmark_prices = _load_benchmark_prices(experiment.protocol.benchmark, train_start, locked_end)
+    benchmark_prices = benchmark_prices.reindex(close_panel.index)
+    if benchmark_prices.isna().any().any():
+        raise ValueError("benchmark OHLCV does not cover every strategy session")
+    features = technical_25_features(
         close=close_panel,
         high=panels["high"],
         low=panels["low"],
         volume=panels["volume"],
         amount=panels["amount"],
+        benchmark_close=benchmark_prices["close"],
     )
     member_long = membership_mask.stack(future_stack=True)
     features = features.where(member_long, other=float("nan"))
-    benchmark_prices = _load_benchmark_prices(experiment.protocol.benchmark, train_start, locked_end)
-    benchmark_prices = benchmark_prices.reindex(close_panel.index)
-    if benchmark_prices.isna().any().any():
-        raise ValueError("benchmark OHLCV does not cover every strategy session")
     tradability_panels = _load_tradability_panels(
         symbols, close_panel.index, root=PROJECT_ROOT / "data" / "raw" / "tradability_joinquant"
     )
-    labels = forward_excess_return_20d(open_panel, benchmark_prices["open"], horizon=experiment.protocol.horizon)
+    labels = forward_excess_return(open_panel, benchmark_prices["open"], horizon=experiment.protocol.horizon)
     # Select one LightGBM configuration using development folds only.  The
     # selected configuration is then shared by S0--S3 and later windows.
     selected_model, model_selection_table, selected_model_name = select_model(
-        features=features[list(BASE_FACTORS)], labels=labels, base_config=experiment.model
+        features=features[list(BASE_FACTORS)], labels=labels, base_config=experiment.model,
+        horizon=experiment.protocol.horizon,
     )
     experiment = replace(experiment, model=selected_model)
     selection_dir = PROJECT_ROOT / "data" / "warehouse" / "model_selection"
     selection_dir.mkdir(parents=True, exist_ok=True)
     model_selection_table.to_csv(selection_dir / f"{profile}_m1_m6_development.csv", index=False)
+    evaluation_start = (
+        experiment.protocol.validation_start if is_s4_weekly else experiment.protocol.train_start
+    )
     decision_dates = close_panel.index[::experiment.protocol.rebalance_days]
+    decision_dates = decision_dates[decision_dates >= pd.Timestamp(evaluation_start)]
     selected_by_date = _profile_features(
         profile=profile, features=features, benchmark_prices=benchmark_prices,
+        stock_close=close_panel,
         decision_dates=decision_dates, base_factors=BASE_FACTORS, labels=labels,
         llm_start=pd.Timestamp(llm_start) if llm_start else None,
         llm_end=pd.Timestamp(llm_end) if llm_end else None,
+        cache_namespace=_factor_selection_namespace(experiment),
+        model_config=selected_model,
+        horizon=experiment.protocol.horizon,
+        factor_decision_days=experiment.protocol.factor_decision_days,
+        rebalance_days=experiment.protocol.rebalance_days,
     )
     if profile == "m0":
         scores = _direct_momentum_scores(
@@ -389,18 +513,31 @@ def run(
         scores = rolling_qlib_scores(
             features=features, labels=labels, decision_dates=decision_dates,
             train_start=train_start, horizon=experiment.protocol.horizon, model_config=selected_model,
+            retrain_days=experiment.protocol.model_retrain_days,
+            rebalance_days=experiment.protocol.rebalance_days,
             selected_features_by_date=selected_by_date,
+            cache_root=PROJECT_ROOT / "data" / "warehouse" / "cache" / "matrices",
+            cache_namespace=experiment.contract_hash,
         )
+    # S4 evaluates only 2024–2025.  The feature/label panels still contain
+    # 2021–2023 so the expanding LightGBM window has mature training data,
+    # but no earlier S4 trading or LLM decision is generated.
+    if is_s4_weekly:
+        scores = scores.loc[evaluation_start:locked_end]
     if not scores.notna().any().any():
         raise ValueError(
             f"profile {profile} produced no valid scores; check factor coverage and warm-up"
         )
+    # Diagnostics must use the same evaluation panel as the scores.  S4 keeps
+    # the full label history for PIT-safe model training, but its score panel is
+    # intentionally restricted to 2024–2025.
+    diagnostic_labels = labels.reindex(index=scores.index, columns=scores.columns)
     states = pd.Series(
         {date: classify_market_state(benchmark_prices.loc[:date, "close"]) for date in decision_dates},
         name="state",
     )
     fold_summary, state_summary, quantiles, rank_ic = score_diagnostics(
-        scores=scores, labels=labels, states=states
+        scores=scores, labels=diagnostic_labels, states=states
     )
     strategy = TopKDropoutStrategy(top_k=experiment.portfolio.top_k, n_drop=experiment.portfolio.n_drop)
     engine = LotLedgerEngine(
@@ -413,30 +550,62 @@ def run(
     report_gen = QuantStatsReport()
     exp_log = ExperimentLog(log_path)
 
+    # Build positions and execute the ledger once over the selected evaluation
+    # years.  Training history is deliberately not an invested period here.
+    # The former implementation restarted both cash and TopK holdings at the
+    # 2024/2025 boundaries.  That made phase reports useful as diagnostics,
+    # but unsuitable as a single continuous investment path.  One full run is
+    # now the source of truth; phase/year views below are slices of it.
+    all_weights = strategy.build_weights(scores, experiment.protocol.rebalance_days)
+    execution_open = open_panel.loc[all_weights.index]
+    valuation_close = close_panel.loc[all_weights.index]
+    execution_tradability = {
+        name: panel.loc[all_weights.index] for name, panel in tradability_panels.items()
+    }
+    continuous_result = engine.run(
+        MarketPrices(
+            execution_open=execution_open,
+            valuation_close=valuation_close,
+            tradability=execution_tradability,
+        ), all_weights, experiment.execution, actions=actions,
+    )
+    continuous_benchmark = aligned_close_benchmark_returns(
+        benchmark_open=benchmark_prices.loc[all_weights.index, "open"],
+        benchmark_close=benchmark_prices.loc[all_weights.index, "close"],
+        signal_weights=all_weights,
+    )
+
     phase_diagnostics: dict[str, tuple[pd.DataFrame, dict[str, float | None]]] = {}
     phase_status: dict[str, dict[str, object]] = {}
+    if profile in {"s4", "s4_n2"}:
+        phase_status["research_scope"] = {
+            "classification": "exploratory_non_pit",
+            "reason": "LLM received live Crossref index results; outputs are not formal historical evidence.",
+        }
 
-    def run_phase(phase: str, start: str, end: str) -> tuple[dict, Path]:
-        weights = strategy.build_weights(
-            scores.loc[start:end], experiment.protocol.rebalance_days
+    def result_slice(start: str, end: str) -> BacktestResult:
+        mask = (continuous_result.returns.index >= pd.Timestamp(start)) & (continuous_result.returns.index <= pd.Timestamp(end))
+        trades = continuous_result.trades
+        if not trades.empty and "date" in trades:
+            trade_dates = pd.to_datetime(trades["date"])
+            trades = trades.loc[(trade_dates >= pd.Timestamp(start)) & (trade_dates <= pd.Timestamp(end))].copy()
+        return BacktestResult(
+            returns=continuous_result.returns.loc[mask],
+            value=continuous_result.value.loc[mask],
+            trades=trades,
         )
-        result = engine.run(
-            MarketPrices(
-                execution_open=open_panel.loc[start:end],
-                valuation_close=close_panel.loc[start:end],
-                tradability={name: panel.loc[start:end] for name, panel in tradability_panels.items()},
-            ), weights, experiment.execution, actions=actions
-        )
+
+    def record_view(phase: str, start: str, end: str) -> tuple[dict, Path]:
+        result = result_slice(start, end)
+        benchmark = continuous_benchmark.loc[result.returns.index]
         kinds = result.trades.get("kind", pd.Series(dtype=str)).dropna().astype(str)
         quarantine_kinds = sorted({kind for kind in kinds if kind.startswith("blocked_")})
         phase_status[phase] = {
             "run_status": "complete_with_quarantines" if quarantine_kinds else "complete",
             "quarantine_kinds": quarantine_kinds,
             "quarantine_records": int(kinds.str.startswith("blocked_").sum()),
+            "ledger_origin": f"continuous_{pd.Timestamp(evaluation_start).year}_{pd.Timestamp(locked_end).year}",
         }
-        # The return series alone cannot reconstruct whether a change came
-        # from a buy, sell, dividend, or corporate action.  Persist the ledger
-        # next to the run under its immutable contract identifier.
         ledger_path = execution_dir / f"{experiment.contract_hash}_{phase}_ledger.csv"
         result.trades.to_csv(ledger_path, index=False)
         (execution_dir / f"{experiment.contract_hash}_{phase}_ledger.json").write_text(
@@ -446,19 +615,13 @@ def run(
                     "phase": phase,
                     "ledger_csv": ledger_path.name,
                     "record_count": len(result.trades),
+                    "ledger_origin": f"continuous_{pd.Timestamp(evaluation_start).year}_{pd.Timestamp(locked_end).year}",
                     "execution_clock": "signal_close_to_next_open; close_valuation",
                     "lot_size": 100,
-                    "run_status": phase_status.get(phase, {}).get("run_status"),
-                    "quarantine_kinds": phase_status.get(phase, {}).get("quarantine_kinds", []),
-                },
-                ensure_ascii=False, indent=2,
-            ) + "\n",
-            encoding="utf-8",
-        )
-        benchmark = aligned_close_benchmark_returns(
-            benchmark_open=benchmark_prices.loc[start:end, "open"],
-            benchmark_close=benchmark_prices.loc[start:end, "close"],
-            signal_weights=weights,
+                    "run_status": phase_status[phase]["run_status"],
+                    "quarantine_kinds": quarantine_kinds,
+                }, ensure_ascii=False, indent=2,
+            ) + "\n", encoding="utf-8",
         )
         metrics = report_gen.metrics(result, benchmark)
         metrics["run_status"] = phase_status[phase]["run_status"]
@@ -467,17 +630,37 @@ def run(
         report_gen.build(result, benchmark, out_path)
         return metrics, out_path
 
-    train_metrics, train_report_path = run_phase(
-        "train", train_start, train_end
-    )
-    holdout_metrics, holdout_report_path = run_phase(
-        "holdout", holdout_start, holdout_end
-    )
-    locked_metrics, locked_report_path = run_phase(
-        "locked_2025", experiment.protocol.locked_start, locked_end
-    )
+    if is_s4_weekly:
+        train_metrics, train_report_path = ({"run_status": "not_evaluated_for_s4_window"}, report_dir / "not_evaluated.html")
+    else:
+        train_metrics, train_report_path = record_view("train", train_start, train_end)
+    holdout_metrics, holdout_report_path = record_view("holdout", holdout_start, holdout_end)
+    locked_metrics, locked_report_path = record_view("locked_2025", experiment.protocol.locked_start, locked_end)
+    full_phase = f"continuous_{pd.Timestamp(evaluation_start).year}_{pd.Timestamp(locked_end).year}"
+    full_metrics, continuous_report_path = record_view(full_phase, evaluation_start, locked_end)
+
+    annual_metrics: dict[str, dict] = {}
+    annual_notes: dict[str, str] = {}
+    for year in range(pd.Timestamp(evaluation_start).year, pd.Timestamp(locked_end).year + 1):
+        year_key = str(year)
+        year_result = result_slice(f"{year}-01-01", f"{year}-12-31")
+        year_benchmark = continuous_benchmark.loc[year_result.returns.index]
+        metrics = report_gen.metrics(year_result, year_benchmark)
+        annual_metrics[year_key] = metrics
+        strategy_return = float((1.0 + year_result.returns).prod() - 1.0)
+        benchmark_return = float((1.0 + year_benchmark).prod() - 1.0)
+        excess = strategy_return - benchmark_return
+        annual_notes[year_key] = (
+            f"- 本策略累计收益 **{strategy_return:.1%}**，沪深300同期 **{benchmark_return:.1%}**，"
+            f"相对差额 **{excess:+.1%}**。\n"
+            f"- 年内最大回撤为 **{_format_metric(metrics.get('Max Drawdown'), 'pct')}**，"
+            f"夏普为 **{_format_metric(metrics.get('Sharpe'), 'num')}**。\n"
+            "- 这是该自然年的历史回测切片，用于解释路径；不能据此推断未来收益。"
+        )
     diagnostics_path = write_diagnostics(
-        out_dir=PROJECT_ROOT / "data" / "warehouse" / "diagnostics",
+        out_dir=profile_diagnostics_dir(
+            PROJECT_ROOT / "data" / "warehouse" / "diagnostics", profile,
+        ),
         profile=experiment.factor_name,
         fold_summary=fold_summary,
         state_summary=state_summary,
@@ -490,16 +673,13 @@ def run(
     # "how many experiments have been tried", not "how many phases".
     exp_log.append(
         experiment,
-        {"train": train_metrics, "holdout": holdout_metrics, "locked_2025": locked_metrics},
+        {"train": train_metrics, "holdout": holdout_metrics, "locked_2025": locked_metrics,
+         full_phase: full_metrics, "annual": annual_metrics},
         phase="full_run",
     )
     trial_count = exp_log.count_trials()
     analysis = ReportExplainer().explain(
-        metrics={
-            "train": train_metrics,
-            "holdout": holdout_metrics,
-            "trial_count_so_far": trial_count,
-        },
+        metrics={"annual": annual_metrics, "full_period": full_metrics, "trial_count_so_far": trial_count},
         method_summary=f"{experiment.factor_name}; fixed contract {experiment.contract_hash}; Qlib LightGBM; TopK={experiment.portfolio.top_k}; n_drop={experiment.portfolio.n_drop}",
     )
 
@@ -507,10 +687,9 @@ def run(
         experiment=experiment,
         universe_size=len(symbols),
         trial_count=trial_count,
-        train_metrics=train_metrics,
-        holdout_metrics=holdout_metrics,
-        train_report_path=train_report_path,
-        holdout_report_path=holdout_report_path,
+        annual_metrics=annual_metrics,
+        annual_notes=annual_notes,
+        continuous_report_path=continuous_report_path,
         diagnostics_path=diagnostics_path,
         analysis=analysis,
         phase_status=phase_status,
@@ -526,6 +705,7 @@ def run(
         holdout_report_path=holdout_report_path,
         locked_metrics=locked_metrics,
         locked_report_path=locked_report_path,
+        continuous_report_path=continuous_report_path,
         consolidated_report_path=consolidated_report_path,
         diagnostics_path=diagnostics_path,
         trial_count=trial_count,

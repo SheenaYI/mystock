@@ -5,9 +5,10 @@ import json
 import pytest
 
 from research.contracts.experiment import (
-    FrozenExperiment, PortfolioContract, build_evidence_contract,
+    FrozenExperiment, PortfolioContract, ProtocolContract, build_evidence_contract,
 )
 from research.experiment import ExperimentLog
+from research.pipeline import _factor_selection_namespace
 
 
 def test_contract_hash_changes_when_a_method_parameter_changes():
@@ -19,6 +20,30 @@ def test_contract_hash_changes_when_a_method_parameter_changes():
 
 def test_m0_has_a_distinct_frozen_profile_name():
     assert FrozenExperiment(profile="m0").factor_name == "technical_m0_return_20_direct"
+
+
+def test_s3_next_has_a_distinct_challenger_profile_name():
+    assert FrozenExperiment(profile="s3_next").factor_name == "technical_s3_next_literature_challenger"
+
+
+def test_s4_has_a_distinct_exploratory_profile_name():
+    assert FrozenExperiment(profile="s4").factor_name == "technical_s4_w1_economic_coverage_n5"
+    assert FrozenExperiment(profile="s4_n2").factor_name == "technical_s4_w1_economic_coverage_n2"
+
+
+def test_protocol_requires_independent_clocks_to_align_on_rebalances():
+    weekly = ProtocolContract(horizon=5, rebalance_days=5, model_retrain_days=20, factor_decision_days=20)
+    assert weekly.model_retrain_days == 20
+    with pytest.raises(ValueError, match="whole number"):
+        ProtocolContract(rebalance_days=5, model_retrain_days=12)
+
+
+def test_weekly_s4_turnover_profiles_share_one_factor_selection_namespace():
+    protocol = ProtocolContract(horizon=5, rebalance_days=5, model_retrain_days=20, factor_decision_days=20)
+    n5 = FrozenExperiment(profile="s4", protocol=protocol)
+    n2 = FrozenExperiment(profile="s4_n2", protocol=protocol, portfolio=PortfolioContract(n_drop=2))
+    assert n5.contract_hash != n2.contract_hash
+    assert _factor_selection_namespace(n5) == _factor_selection_namespace(n2)
 
 
 def test_formal_experiment_rejects_unresolved_evidence():

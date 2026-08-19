@@ -37,3 +37,33 @@ def test_selected_features_are_filtered_before_dropna():
         model_config=LightGBMConfig(num_leaves=3, max_depth=2, min_data_in_leaf=2, num_boost_round=4, early_stopping_rounds=2),
     )
     assert scores.loc[dates[110]].notna().all()
+
+
+def test_weekly_scores_reuse_the_monthly_fitted_model(monkeypatch):
+    dates = pd.date_range("2021-01-01", periods=140, freq="B")
+    instruments = ["AAA", "BBB", "CCC"]
+    index = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
+    features = pd.DataFrame({"return_5": 1.0}, index=index)
+    labels = pd.DataFrame(0.01, index=dates, columns=instruments)
+    fits = []
+
+    class FakeModel:
+        def __init__(self, config):
+            self.config = config
+
+        def fit(self, dataset):
+            fits.append(dataset)
+            return self
+
+        def predict(self, current):
+            return pd.Series(0.0, index=current.index)
+
+    monkeypatch.setattr("research.models.rolling.QlibLightGBMModel", FakeModel)
+    decisions = pd.DatetimeIndex([dates[90], dates[95], dates[100], dates[105], dates[110]])
+    scores = rolling_qlib_scores(
+        features=features, labels=labels, decision_dates=decisions,
+        train_start="2021-01-01", horizon=5, rebalance_days=5, retrain_days=20,
+        validation_sessions=60,
+    )
+    assert len(fits) == 2
+    assert scores.loc[decisions].notna().all().all()

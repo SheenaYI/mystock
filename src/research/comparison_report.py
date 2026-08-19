@@ -54,9 +54,9 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8p
 <p class='note'>每个单元依次为：2021–2023 开发 / 2024 验证 / 2025 锁定窗。合同在开发期确定后冻结，验证与锁定窗均按同一合同机械执行；结果只在合同、数据清单和运行日志一并保存后解读。</p>
 <table><tr><th>指标</th><th>S0 固定七因子</th><th>S1 确定性扩展</th><th>S2 状态条件化</th></tr>""" + "".join(rows) + """</table>
 <h2>单组网页报告</h2><ul>
-<li><a href='report_technical_baseline_7.html'>S0 固定七因子</a></li>
-<li><a href='report_technical_s1_deterministic.html'>S1 确定性扩展</a></li>
-<li><a href='report_technical_s2_state_mapping.html'>S2 状态条件化</a></li>
+<li><a href='../S0_fixed_7/report_technical_baseline_7.html'>S0 固定七因子</a></li>
+<li><a href='../S1_deterministic/report_technical_s1_deterministic.html'>S1 确定性扩展</a></li>
+<li><a href='../S2_state_mapping/report_technical_s2_state_mapping.html'>S2 状态条件化</a></li>
 </ul></body></html>"""
     output.write_text(doc, encoding="utf-8")
     return output

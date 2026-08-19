@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 
 
-def forward_excess_return_20d(
+def forward_excess_return(
     stock_open: pd.DataFrame, benchmark_open: pd.Series, horizon: int = 20
 ) -> pd.DataFrame:
     """Return the decision-day label for a next-open, ``horizon``-day trade.
@@ -24,6 +24,18 @@ def forward_excess_return_20d(
     stock_return = exit_.div(entry).sub(1.0)
     benchmark_return = benchmark_open.shift(-(horizon + 1)).div(benchmark_open.shift(-1)).sub(1.0)
     return stock_return.sub(benchmark_return, axis=0)
+
+
+def forward_excess_return_20d(
+    stock_open: pd.DataFrame, benchmark_open: pd.Series, horizon: int = 20
+) -> pd.DataFrame:
+    """Backward-compatible name for :func:`forward_excess_return`.
+
+    The original implementation has always accepted an arbitrary horizon; new
+    protocols should use the neutral name so a five-day label is not described
+    as a twenty-day label.
+    """
+    return forward_excess_return(stock_open, benchmark_open, horizon=horizon)
 
 
 def mature_labels_as_of(labels: pd.DataFrame, *, as_of: pd.Timestamp, horizon: int = 20) -> pd.DataFrame:

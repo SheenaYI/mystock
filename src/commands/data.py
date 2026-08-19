@@ -11,12 +11,14 @@ import typer
 
 from common.logger import PROJECT_ROOT, get_logger, load_settings
 from data.akshare import AKShareProvider
+from data.a_stock_data import AStockDataProvider
 from data.downloader import Downloader
 from data.manifest import build_ohlcv_manifest, write_ohlcv_manifest
 from data.membership_import import convert_snapshot_archive
 from data.storage import ParquetStorage
 from data.joinquant_tradability import audit_tradability_coverage, import_export, merge_supplement, update_tradability
 from data.repair import repair_symbols
+from data.source_compare import compare_with_primary, normalize_ohlcv
 
 app = typer.Typer(help="Data acquisition commands.")
 logger = get_logger(__name__)
@@ -111,6 +113,79 @@ def update(
         preview = ", ".join(summary["failed"][:20])
         suffix = " ..." if len(summary["failed"]) > 20 else ""
         typer.echo(f"失败列表: {preview}{suffix}")
+
+
+@app.command()
+def supplement(
+    source: str = typer.Option(..., help="补充来源，目前支持 a-stock-data。"),
+    symbols: str = typer.Option(..., help="Comma-separated symbols, e.g. 600000.SH,000001.SZ."),
+    start_date: str = typer.Option(..., help="Supplement start date (YYYY-MM-DD)."),
+    end_date: str = typer.Option(..., help="Supplement end date (YYYY-MM-DD)."),
+) -> None:
+    """Fetch a supplemental source, archive it, and report missing/conflicting rows.
+
+    This command never writes into the existing AKShare OHLCV archive.  The
+    comparison report is provider-neutral and can be reused by future sources.
+    """
+    if source != "a-stock-data":
+        raise typer.BadParameter("目前只支持 --source a-stock-data")
+    target = [item.strip() for item in symbols.split(",") if item.strip()]
+    if not target:
+        raise typer.BadParameter("--symbols 不能为空")
+    supplement_root = PROJECT_ROOT / "data" / "raw" / "a_stock_data_raw" / "daily"
+    report_root = PROJECT_ROOT / "data" / "warehouse" / "source_comparisons" / "a_stock_data"
+    primary_root = _raw_dir()
+    supplement_root.mkdir(parents=True, exist_ok=True)
+    report_root.mkdir(parents=True, exist_ok=True)
+    try:
+        provider = AStockDataProvider()
+    except Exception as exc:
+        # Keep acquisition failure explicit and machine-readable.  In
+        # particular, do not emit a traceback or touch the AKShare archive.
+        summary = {
+            "source": source,
+            "requested": len(target),
+            "archived": 0,
+            "failed": [{"symbol": symbol, "error": repr(exc)} for symbol in target],
+            "reports": [],
+        }
+        summary_path = report_root / "latest_summary.json"
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        typer.echo(f"补充源连接失败，未修改 AKShare；失败报告: {summary_path}", err=True)
+        raise typer.Exit(code=1)
+    reports = []
+    failures = []
+    for symbol in target:
+        try:
+            frame = normalize_ohlcv(
+                provider.fetch(symbol, start_date=start_date, end_date=end_date),
+                symbol=symbol,
+            )
+            if frame.empty:
+                failures.append({"symbol": symbol, "error": "empty response"})
+                continue
+            frame.to_parquet(supplement_root / f"{symbol}.parquet", index=False, compression="zstd")
+            reports.append(compare_with_primary(
+                frame,
+                primary_file=primary_root / f"{symbol}.parquet",
+                report_root=report_root,
+                source_name="a-stock-data",
+            ))
+        except Exception as exc:
+            logger.warning("supplement failed symbol=%s: %s", symbol, exc)
+            failures.append({"symbol": symbol, "error": repr(exc)})
+    summary = {
+        "source": source,
+        "requested": len(target),
+        "archived": len(reports),
+        "failed": failures,
+        "reports": reports,
+    }
+    summary_path = report_root / "latest_summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    typer.echo(f"补充源原始数据目录: {supplement_root}")
+    typer.echo(f"缺失/冲突报告: {summary_path}")
+    typer.echo(f"完成: {len(reports)}/{len(target)} 成功, {len(failures)} 失败")
 
 
 @app.command()

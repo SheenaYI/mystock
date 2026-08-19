@@ -77,6 +77,36 @@ def _analysis_html(analysis_text: str) -> str:
     return markdown.markdown(html.escape(analysis_text), extensions=["extra", "sane_lists"])
 
 
+def _add_summary_entry_banner(continuous_report_path: Path, summary_path: Path) -> None:
+    """Point raw QuantStats pages to the report containing the explanation layer.
+
+    QuantStats owns the continuous tearsheet and intentionally does not know
+    about our annual plain-language table or LLM explanation.  A small banner
+    prevents users from mistaking that detail page for the complete report.
+    """
+    if not continuous_report_path.is_file():
+        return
+    content = continuous_report_path.read_text(encoding="utf-8")
+    marker = "mystock-report-entry-banner"
+    body_start = content.find("<body")
+    if marker in content or body_start < 0:
+        return
+    body_end = content.find(">", body_start)
+    if body_end < 0:
+        return
+    summary_relative_path = os.path.relpath(summary_path, continuous_report_path.parent)
+    banner = (
+        f"<div id='{marker}' style='margin:16px;padding:12px 16px;"
+        "background:#fff7e7;border-left:4px solid #d6a441;"
+        "font-family:-apple-system,\"PingFang SC\",\"Microsoft YaHei\",sans-serif;'>"
+        "这是连续净值与 QuantStats 详细图表页。"
+        f"<a href='{html.escape(summary_relative_path)}'>打开完整研究报告（年度白话表格与 AI 结果解读）</a>。"
+        "</div>"
+    )
+    content = content[: body_end + 1] + banner + content[body_end + 1 :]
+    continuous_report_path.write_text(content, encoding="utf-8")
+
+
 def build_consolidated_report(
     experiment: FrozenExperiment,
     universe_size: int,
@@ -158,4 +188,5 @@ def build_consolidated_report(
 </html>
 """
     out_path.write_text(html_doc, encoding="utf-8")
+    _add_summary_entry_banner(continuous_report_path, out_path)
     return out_path

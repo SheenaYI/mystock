@@ -1,0 +1,26 @@
+{
+  "profile": "technical_s4_w1_economic_coverage_n5",
+  "phase_metrics": {
+    "holdout": {
+      "active_return": 0.5491442301471856,
+      "relative_max_drawdown": -0.08210816850461833,
+      "tracking_error": 0.18991631970549527,
+      "information_ratio": 2.536878381065914,
+      "mean_rolling_beta_60": 1.0441879750746406
+    },
+    "locked_2025": {
+      "active_return": 0.01872086309512655,
+      "relative_max_drawdown": -0.1538913912470815,
+      "tracking_error": 0.16122089965887948,
+      "information_ratio": 0.21143805652437808,
+      "mean_rolling_beta_60": 1.002348932004581
+    },
+    "continuous_2024_2025": {
+      "active_return": 0.5781455471943779,
+      "relative_max_drawdown": -0.15389139124708107,
+      "tracking_error": 0.17650759924457704,
+      "information_ratio": 1.45874663654652,
+      "mean_rolling_beta_60": 1.027097245477124
+    }
+  }
+}

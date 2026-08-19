@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>mystock 研究报告 - technical_s4_w1_economic_coverage_n2</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+          max-width: 1100px; margin: 0 auto; padding: 24px; color: #222; line-height: 1.7; }
+  h1 { font-size: 24px; } h2 { font-size: 19px; margin-top: 36px;
+          border-bottom: 1px solid #ddd; padding-bottom: 6px; }
+  h3 { margin: 0 0 6px; font-size: 16px; }
+  .meta { color: #666; font-size: 14px; }
+  .notice { color: #694f20; background: #fff7e7; border-left: 4px solid #d6a441;
+             padding: 10px 16px; border-radius: 4px; }
+  .analysis { background: #f7f7f5; border-left: 4px solid #a37f4c;
+               padding: 8px 20px; border-radius: 4px; }
+  .year-notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .year-note { background: #f7f9fb; border: 1px solid #e1e7ec; border-radius: 6px; padding: 12px 16px; }
+  .year-note p { margin: 4px 0; }
+  table.metrics { border-collapse: collapse; width: 100%; font-size: 14px; overflow-x: auto; display: block; }
+  table.metrics th, table.metrics td { border: 1px solid #ddd; padding: 8px 12px; text-align: right; white-space: nowrap; }
+  table.metrics th:first-child, table.metrics td:first-child { text-align: left; }
+  table.metrics th { background: #f0f0ee; }
+  iframe { width: 100%; height: 1900px; border: 1px solid #ddd; margin-top: 8px; }
+  pre { background: #f7f7f7; padding: 12px; white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+<h1>mystock 研究报告</h1>
+<p class="meta">
+  因子方案: technical_s4_w1_economic_coverage_n2 · Universe: 553 只股票 ·
+  预测窗口: 5 个交易日 · 调仓: 5 个交易日 ·
+  模型重训: 20 个交易日 · 因子决策: 20 个交易日 ·
+  TopK: 10 · n_drop: 2 ·
+  合同: c76c206ccd67 · 第 52 次实验 · 生成于 2026-08-18 18:13
+</p>
+<p class="notice">本页的 2024–2025 图表来自同一条连续的现金、持仓和收盘估值账本；年度表仅是按自然年切片汇总，不是把每年重新从初始资金开始回测。历史回测不代表未来收益保证。</p>
+<p class='notice'>S4 使用了实时联网文献索引辅助，因此属于探索性、非 PIT 实验；不得作为正式历史验证或锁定窗结论。</p>
+
+<h2>年度关键指标</h2>
+<table class='metrics'><tr><th>指标（按自然年计算）</th><th>2024</th><th>2025</th></tr><tr><td>累计收益</td><td>63.0%</td><td>20.0%</td></tr><tr><td>年化收益</td><td>40.0%</td><td>13.0%</td></tr><tr><td>夏普比率（收益相对波动）</td><td>2.03</td><td>0.98</td></tr><tr><td>索提诺比率（收益相对下行波动）</td><td>3.86</td><td>1.38</td></tr><tr><td>最大回撤（阶段内峰值到低点）</td><td>-13.0%</td><td>-15.0%</td></tr><tr><td>最长回本天数</td><td>66 天</td><td>64 天</td></tr><tr><td>年化波动率</td><td>27.0%</td><td>21.0%</td></tr><tr><td>贝塔（相对沪深300的敏感度）</td><td>1.11</td><td>1.01</td></tr><tr><td>阿尔法（扣除大盘影响后的超额）</td><td>32.0%</td><td>3.0%</td></tr><tr><td>信息比率（超额收益稳定性）</td><td>0.17</td><td>0.01</td></tr></table>
+
+<h2>年度白话批注</h2>
+<div class="year-notes"><section class='year-note'><h3>2024 年怎么看</h3><ul>
+<li>本策略累计收益 <strong>62.6%</strong>，沪深300同期 <strong>18.4%</strong>，相对差额 <strong>+44.2%</strong>。</li>
+<li>年内最大回撤为 <strong>-13.0%</strong>，夏普为 <strong>2.03</strong>。</li>
+<li>这是该自然年的历史回测切片，用于解释路径；不能据此推断未来收益。</li>
+</ul></section><section class='year-note'><h3>2025 年怎么看</h3><ul>
+<li>本策略累计收益 <strong>19.7%</strong>，沪深300同期 <strong>17.7%</strong>，相对差额 <strong>+2.0%</strong>。</li>
+<li>年内最大回撤为 <strong>-15.0%</strong>，夏普为 <strong>0.98</strong>。</li>
+<li>这是该自然年的历史回测切片，用于解释路径；不能据此推断未来收益。</li>
+</ul></section></div>
+
+<h2>AI 结果解读</h2>
+<div class="analysis"><p>这份回测报告基于您提供的固定合约和方法（technical_s4_w1_economic_coverage_n2，Qlib LightGBM，TopK=10，n_drop=2），覆盖2024年1月2日至2025年12月31日。下面我用通俗语言解释其中关键指标的含义，<strong>不会</strong>给出任何买卖建议，也不做收益承诺。</p>
+<hr />
+<h3>总体结果</h3>
+<ul>
+<li><strong>累计收益</strong>：整个回测期（2024-2025）累计收益为 <strong>0.95</strong>，也就是按该策略运行两年，本金增长约95%。</li>
+<li><strong>年化收益（CAGR）</strong>：折合年化收益率为 <strong>0.26</strong>（即26%）。2024年单独看年化约40%（累计63%），2025年约13%（累计20%）。</li>
+</ul>
+<hr />
+<h3>风险与波动</h3>
+<ul>
+<li><strong>最大回撤</strong>：全期最大亏损幅度为 <strong>-0.17</strong>（即从顶部回落17%）。2024年最大回撤-13%，2025年为-15%。</li>
+<li><strong>最长回撤天数</strong>：全期最长连续处于回撤状态的天数为 <strong>195天</strong>（约6个多月）。2024年66天，2025年64天。</li>
+<li><strong>波动率（年化）</strong>：全期年化波动率为 <strong>0.24</strong>，2024年0.27，2025年0.21。波动率越高，收益起伏越大。</li>
+<li><strong>日度在险价值（VaR）</strong>：全期每天亏损超过 <strong>-0.02</strong> 的概率较小；2024年为-0.03，2025年为-0.02。这意味着在正常市场条件下，单日最大预期亏损约在这些水平。</li>
+</ul>
+<hr />
+<h3>收益质量指标</h3>
+<ul>
+<li><strong>夏普比率</strong>：全期 <strong>1.55</strong>，2024年2.03，2025年0.98。夏普比率衡量每承担一单位风险能获得多少超额收益，数值越高越好。1.5以上通常被认为不错。</li>
+<li><strong>Sortino比率</strong>：与夏普类似，但只考虑下行风险。全期2.57，2024年3.86，2025年1.38。</li>
+<li><strong>Calmar比率</strong>：年化收益除以最大回撤，反映“收益/痛苦比”。全期1.52，2024年3.18，2025年0.89。</li>
+<li><strong>盈亏比（Payoff Ratio）</strong>：平均盈利除以平均亏损。全期1.23，2024年1.55，2025年0.95。2025年盈亏比低于1，说明平均赚的比平均亏的少，但盈利次数更多。</li>
+<li><strong>利润因子（Profit Factor）</strong>：总盈利除以总亏损。全期1.36，2024年1.52，2025年1.20。大于1说明整体盈利。</li>
+</ul>
+<hr />
+<h3>胜率与持续性</h3>
+<ul>
+<li><strong>盈利天数占比</strong>：全期约 <strong>53%</strong> 的日子是赚钱的；2024年50%，2025年55%。</li>
+<li><strong>盈利月份占比</strong>：全期约 <strong>67%</strong> 的月份是赚钱的；2024年和2025年都是67%。</li>
+<li><strong>连续盈利/亏损</strong>：全期最多连续盈利 <strong>10天</strong>，最多连续亏损 <strong>6天</strong>。</li>
+<li><strong>月度表现</strong>：最佳月份盈利24%（出现在2024年），最差月份亏损-4%（也出现在2024年）。</li>
+</ul>
+<hr />
+<h3>其他说明</h3>
+<ul>
+<li><strong>风险免费率</strong>设为0，所以所有收益都是“超额收益”。</li>
+<li><strong>市场参与时间</strong>接近100%，也就是说策略几乎一直持仓，没有空仓。</li>
+<li><strong>Beta</strong>（对市场敏感度）全期为1.08，说明策略整体波动略高于市场基准。</li>
+<li><strong>Alpha</strong>（超额收益）全期为0.17，2024年0.32，2025年0.03，代表策略相对市场基准获取额外收益的能力。</li>
+</ul>
+<hr />
+<h3>重要提醒</h3>
+<p><strong>以上所有数据均来自历史回测，仅代表过去表现，不构成对未来收益的保证。</strong> 回测中采用的固定合约和模型参数，在实际交易中可能因市场环境变化、交易成本、滑点、人类执行偏差等因素而表现不同。请勿将回测结果视为未来投资收益的承诺。</p></div>
+
+<h2>运行质量状态</h2>
+<pre>{&#x27;research_scope&#x27;: {&#x27;classification&#x27;: &#x27;exploratory_non_pit&#x27;, &#x27;reason&#x27;: &#x27;LLM received live Crossref index results; outputs are not formal historical evidence.&#x27;}, &#x27;holdout&#x27;: {&#x27;run_status&#x27;: &#x27;complete&#x27;, &#x27;quarantine_kinds&#x27;: [], &#x27;quarantine_records&#x27;: 0, &#x27;ledger_origin&#x27;: &#x27;continuous_2024_2025&#x27;}, &#x27;locked_2025&#x27;: {&#x27;run_status&#x27;: &#x27;complete&#x27;, &#x27;quarantine_kinds&#x27;: [], &#x27;quarantine_records&#x27;: 0, &#x27;ledger_origin&#x27;: &#x27;continuous_2024_2025&#x27;}, &#x27;continuous_2024_2025&#x27;: {&#x27;run_status&#x27;: &#x27;complete&#x27;, &#x27;quarantine_kinds&#x27;: [], &#x27;quarantine_records&#x27;: 0, &#x27;ledger_origin&#x27;: &#x27;continuous_2024_2025&#x27;}}</pre>
+
+<h2>分数与相对基准诊断</h2>
+<p><a href="../../diagnostics/S4_W1_n2/technical_s4_w1_economic_coverage_n2_diagnostics.html">打开 RankIC/ICIR、状态、分位数组合收益、相对净值与滚动 Beta 诊断</a></p>
+
+<h2>2024–2025 连续完整图表</h2>
+<p>图表中的策略净值和沪深300基准使用同一“下一交易日开盘成交、当日收盘估值”的时钟。年度表帮助定位某一年的表现；此图用于判断连续路径、跨年回撤和相对表现。</p>
+<iframe src="continuous_2024_2025_technical_s4_w1_economic_coverage_n2.html"></iframe>
+</body>
+</html>
